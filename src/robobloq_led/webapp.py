@@ -1,6 +1,7 @@
 import mss
 import time
 import asyncio
+import os
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -358,7 +359,7 @@ async def screen_sync_loop(cfg: SyncStartRequest, ctl):
 
 HTML_PAGE = r"""
 <!doctype html>
-<html lang="en">
+<html lang="__LANG__">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -630,10 +631,32 @@ HTML_PAGE = r"""
   
 
 <script>
+const LOCALE = "__LANG__";
+const TEXT = {
+  "Ready": ["Ready", "Prêt"], "Working…": ["Working…", "En cours…"], "Error": ["Error", "Erreur"],
+  "Colors": ["Colors", "Couleurs"], "Effects": ["Effects", "Effets"], "Sync": ["Sync", "Synchronisation"],
+  "Selected": ["Selected", "Sélection"], "Apply": ["Apply", "Appliquer"], "Fade": ["Fade", "Fondu"], "Off": ["Off", "Éteindre"], "Stop": ["Stop", "Arrêter"],
+  "Brightness": ["Brightness", "Luminosité"], "Fade time": ["Fade time", "Durée du fondu"], "Effect": ["Effect", "Effet"], "Pulse": ["Pulse", "Pulsation"], "Rainbow": ["Rainbow", "Arc-en-ciel"],
+  "Vitesse DX-Light": ["DX-Light speed", "Vitesse DX-Light"], "Start": ["Start", "Démarrer"], "Monitor": ["Monitor", "Écran"], "Thickness": ["Thickness", "Épaisseur"], "Downscale": ["Downscale", "Réduction"], "Smoothing": ["Smoothing", "Lissage"], "Change threshold": ["Change threshold", "Seuil de changement"],
+  "Start Sync": ["Start sync", "Démarrer la synchronisation"], "Stop Sync": ["Stop sync", "Arrêter la synchronisation"], "Stop All": ["Stop all", "Tout arrêter"], "Status:": ["Status:", "État :"],
+  "Configuration": ["Configuration", "Configuration"], "Contrôleur local Linux (1a86:fe07)": ["Local Linux controller (1a86:fe07)", "Contrôleur local Linux (1a86:fe07)"],
+  "Warm": ["Warm", "Chaud"], "Cool": ["Cool", "Froid"], "White": ["White", "Blanc"], "Red": ["Red", "Rouge"], "Green": ["Green", "Vert"], "Blue": ["Blue", "Bleu"], "Purple": ["Purple", "Violet"],
+  "Rythme contrôleur": ["Controller rhythm", "Rythme contrôleur"], "Météore": ["Meteor", "Météore"], "Scintillement": ["Twinkle", "Scintillement"], "Dégradé": ["Gradient", "Dégradé"], "Défilement": ["Scrolling", "Défilement"], "Feu": ["Fire", "Feu"], "Onde": ["Wave", "Onde"], "Pulsation": ["Pulse", "Pulsation"], "Spectre": ["Spectrum", "Spectre"], "Chenillard": ["Chaser", "Chenillard"], "Arc-en-ciel": ["Rainbow", "Arc-en-ciel"],
+  "Chargement de la configuration DX-Light…": ["Loading DX-Light configuration…", "Chargement de la configuration DX-Light…"], "Session GNOME": ["GNOME session", "Session GNOME"], "Au verrouillage": ["On lock", "Au verrouillage"], "Au déverrouillage": ["On unlock", "Au déverrouillage"], "Contrôleur": ["Controller", "Contrôleur"], "Écran gauche": ["Left display", "Écran gauche"], "Écran droit": ["Right display", "Écran droit"],
+  "Éteindre": ["Turn off", "Éteindre"], "Sync fond": ["Wallpaper sync", "Sync fond"], "Effet DX-Light": ["DX-Light effect", "Effet DX-Light"], "Appliquer": ["Apply", "Appliquer"]
+};
+function t(text) { return TEXT[text]?.[LOCALE === "fr" ? 1 : 0] || text; }
+function localize(root = document) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue.trim();
+    if (value && TEXT[value]) node.nodeValue = node.nodeValue.replace(value, t(value));
+  }
+}
 let selectedEffect = "pulse";
 
-function setConn(text){ document.getElementById("conn").textContent = text; }
-function setStatus(text){ document.getElementById("status").textContent = text; }
+function setConn(text){ document.getElementById("conn").textContent = t(text); }
+function setStatus(text){ document.getElementById("status").textContent = t(text); }
 
 function showTab(name){
   document.getElementById("panel-colors").classList.toggle("hidden", name !== "colors");
@@ -695,6 +718,7 @@ async function loadConfiguration() {
         </div></div>`;
     }).join("") + `<div class="card" style="margin-top:12px"><strong>Session GNOME</strong><div class="config-grid">${sessionAction("lock", session.lock, "Au verrouillage")}${sessionAction("unlock", session.unlock, "Au déverrouillage")}</div></div><div class="row" style="margin-top:12px"><button class="btn primary" onclick="saveConfiguration(${layoutResponse.layout.displays.length})">Appliquer</button></div>`;
     layoutResponse.layout.displays.forEach((_display, index) => updateBottomZone(index));
+    localize(root);
     updateSessionEffect("lock");
     updateSessionEffect("unlock");
   } catch (error) {
@@ -861,6 +885,7 @@ async function startEffect(){
   setStatus(ok ? `Effect running: ${selectedEffect} (speed ${s})` : `Error: ${data.detail || "unknown"}`);
 }
 
+localize();
 syncLabels();
 selectEffect("pulse");
 </script>
@@ -870,7 +895,8 @@ selectEffect("pulse");
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTML_PAGE
+    locale = next((value for value in (os.environ.get("LANGUAGE"), os.environ.get("LC_ALL"), os.environ.get("LC_MESSAGES"), os.environ.get("LANG")) if value), "en")
+    return HTML_PAGE.replace("__LANG__", "fr" if locale.startswith("fr") else "en")
 
 @app.post("/api/color")
 def set_color_api(c: Color):

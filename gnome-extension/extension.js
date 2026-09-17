@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -8,6 +9,16 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const API_URL = 'http://127.0.0.1:8000';
 const WALLPAPER_SYNC_SERVICE = 'robobloq-wallpaper-sync.service';
+const EN = {
+    'Synchroniser le fond d\'ecran': 'Synchronize wallpaper', 'Effets': 'Effects',
+    'Rythme contrôleur': 'Controller rhythm', 'Blanc chaud': 'Warm white',
+    'Bleu doux': 'Soft blue', 'Eteindre': 'Turn off', 'Préférences': 'Preferences',
+    'Vitesse': 'Speed', 'Serpentin': 'Snake', 'Feu': 'Fire', 'Meteore': 'Meteor',
+    'Scintillement': 'Twinkle', 'Dégradé': 'Gradient', 'Defilement': 'Scrolling',
+    'Onde': 'Wave', 'Pulsation': 'Pulse', 'Spectre': 'Spectrum',
+    'Chenillard': 'Chaser', 'Arc-en-ciel': 'Rainbow',
+};
+const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const DYNAMIC_EFFECTS = [
     ['Dynamix', 'dxlight-dynamix', 'weather-clear-symbolic'],
     ['Serpentin', 'dxlight-serpentin', 'weather-few-clouds-symbolic'],
@@ -53,7 +64,7 @@ export default class RobobloqLedExtension extends Extension {
             text: 'LED',
         }));
 
-        this._sync = new PopupMenu.PopupSwitchMenuItem('Synchroniser le fond d\'ecran', false);
+        this._sync = new PopupMenu.PopupSwitchMenuItem(t('Synchroniser le fond d\'ecran'), false);
         this._sync.connect('toggled', (_item, enabled) => {
             if (enabled)
                 this._startSync();
@@ -65,27 +76,27 @@ export default class RobobloqLedExtension extends Extension {
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         this._dxlightSpeed = 50;
-        const effects = new PopupMenu.PopupSubMenuMenuItem('Effets');
+        const effects = new PopupMenu.PopupSubMenuMenuItem(t('Effets'));
         DYNAMIC_EFFECTS.forEach(([label, effect, icon]) =>
             this._addEffect(effects.menu, label, effect, icon));
         effects.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addSpeedControl(effects.menu);
 
-        const rhythm = new PopupMenu.PopupSubMenuMenuItem('Rythme contrôleur');
+        const rhythm = new PopupMenu.PopupSubMenuMenuItem(t('Rythme contrôleur'));
         RHYTHM_EFFECTS.forEach(([label, icon], index) =>
             this._addEffect(rhythm.menu, label, `dxlight-rhythm-${index}`, icon));
         this._indicator.menu.addMenuItem(effects);
         this._indicator.menu.addMenuItem(rhythm);
 
-        this._addAction('Blanc chaud', () => this._setFixedColor(255, 200, 120, 30));
-        this._addAction('Bleu doux', () => this._setFixedColor(10, 132, 255, 35));
-        this._addAction('Eteindre', () => {
+        this._addAction(t('Blanc chaud'), () => this._setFixedColor(255, 200, 120, 30));
+        this._addAction(t('Bleu doux'), () => this._setFixedColor(10, 132, 255, 35));
+        this._addAction(t('Eteindre'), () => {
             this._sync.setToggleState(false);
             post('/api/off');
         });
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addAction('Préférences', () => this.openPreferences());
+        this._addAction(t('Préférences'), () => this.openPreferences());
 
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
@@ -110,7 +121,7 @@ export default class RobobloqLedExtension extends Extension {
 
     _addSpeedControl(menu) {
         const item = new PopupMenu.PopupBaseMenuItem({reactive: false});
-        const label = new St.Label({text: 'Vitesse'});
+        const label = new St.Label({text: t('Vitesse')});
         this._speedValue = new St.Label({text: `${this._dxlightSpeed}%`});
         this._speedSlider = new Slider.Slider(this._dxlightSpeed / 100);
         this._speedSlider.x_expand = true;

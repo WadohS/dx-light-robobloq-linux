@@ -1,9 +1,25 @@
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
+import GLib from 'gi://GLib';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const API_URL = 'http://127.0.0.1:8000';
+const EN = {
+    'DX-Light Configuration': 'DX-Light Configuration', 'Chargement des contrôleurs...': 'Loading controllers...',
+    'Service LED indisponible': 'LED service unavailable', 'Démarre robobloq-led.service puis rouvre cette fenêtre.': 'Start robobloq-led.service, then reopen this window.',
+    'Configuration indisponible': 'Configuration unavailable', 'Un bandeau par écran. Répartis les LEDs sur trois ou quatre côtés selon la pose réelle.': 'One strip per display. Distribute LEDs over three or four sides according to the physical installation.',
+    'Les réglages sont enregistrés localement et appliqués aux contrôleurs sélectionnés.': 'Settings are saved locally and applied to the selected controllers.',
+    'Appliquer la configuration': 'Apply configuration', 'Enregistrer': 'Save', 'Modifications non enregistrées': 'Unsaved changes',
+    'Enregistrement et application...': 'Saving and applying...', 'Enregistrement impossible': 'Unable to save', 'Configuration appliquée': 'Configuration applied',
+    'Le total de chaque zone a été envoyé à son contrôleur.': 'Each zone total was sent to its controller.',
+    'Session GNOME': 'GNOME session', 'Éteindre les LEDs': 'Turn off LEDs', 'Synchronisation fond': 'Wallpaper synchronization', 'Effet DX-Light': 'DX-Light effect',
+    'Au verrouillage': 'On lock', 'Au déverrouillage': 'On unlock', 'Contrôleur': 'Controller', 'Écran': 'Display', 'Écran gauche': 'Left display', 'Écran droit': 'Right display',
+    'Derrière l’écran': 'Behind display', 'Au-dessus de l’écran': 'Above display', 'Sous l’écran': 'Below display', 'À gauche de l’écran': 'Left of display', 'À droite de l’écran': 'Right of display',
+    'De gauche vers la droite': 'Left to right', 'De droite vers la gauche': 'Right to left', 'Bord de l’écran': 'Display edge', 'Centre de l’écran': 'Display center',
+    '3 côtés': '3 sides', '4 côtés': '4 sides', 'LEDs à gauche': 'Left LEDs', 'LEDs en haut': 'Top LEDs', 'LEDs à droite': 'Right LEDs', 'LEDs en bas': 'Bottom LEDs',
+};
+const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const EDGE_KEYS = ['left', 'top', 'right', 'bottom'];
 const SESSION_EFFECTS = [
     ['dxlight-dynamix', 'Dynamix'], ['dxlight-serpentin', 'Serpentin'], ['dxlight-feu', 'Feu'],
@@ -29,11 +45,11 @@ function request(method, path, body, callback) {
 
 function deviceLabel(path) {
     const match = path.match(/usb-[^:]+:(.+)-hidraw$/);
-    return match ? `Contrôleur USB ${match[1]}` : path;
+    return match ? `${t('Contrôleur')} USB ${match[1]}` : path;
 }
 
 function dropdown(labels, selected) {
-    const widget = Gtk.DropDown.new_from_strings(labels);
+    const widget = Gtk.DropDown.new_from_strings(labels.map(t));
     widget.set_selected(Math.max(0, selected));
     return widget;
 }
