@@ -4,6 +4,7 @@ Control a ROBOBLOQ / QinHeng USB HID ambient LED strip (VID:PID **1a86:fe07**) o
 Includes a simple **web UI** (color picker) and a small **CLI**.
 
 > This project was built by reverse-engineering the device protocol via USB capture and implementing native Linux HID control.
+> It builds on the original Linux protocol work by Amel Varghese / RlNZLER.
 
 ---
 
@@ -23,6 +24,30 @@ Includes a simple **web UI** (color picker) and a small **CLI**.
 
 ---
 
+## Quick install
+
+Requires GNOME Shell, Python 3 with `venv`, and a connected DX-Light controller.
+
+```bash
+git clone https://github.com/WadohS/dx-light-robobloq-linux.git
+cd dx-light-robobloq-linux
+./install.sh
+```
+
+The installer creates a user-local Python environment, installs the GNOME
+extension, and enables the API plus the lock-session monitor. Log out and back
+in before using the panel extension.
+
+Wallpaper synchronization is optional because it expects a composite wallpaper
+at `~/.local/share/dual-wallpaper/wallpaper-composite.jpg`, such as the one
+created by [Dual Desktop](https://github.com/WadohS/dual-desktop):
+
+```bash
+systemctl --user enable --now robobloq-wallpaper-sync.service
+```
+
+---
+
 ## Supported device
 
 This project targets devices that show up as:
@@ -36,13 +61,11 @@ This project targets devices that show up as:
 
 ### 1) Udev rule (recommended)
 
-Create a udev rule so you can access the LED device without `sudo`:
+Install the supplied rule so the active desktop session can access the
+controller without `sudo`:
 
 ```bash
-sudo tee /etc/udev/rules.d/99-robobloq-led.rules >/dev/null <<'EOF'
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="fe07", MODE="0666"
-EOF
-
+sudo install -m 0644 99-dx-light.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 # Unplug/replug the LED strip
@@ -54,11 +77,12 @@ Verify permissions:
 ls -l /dev/hidraw*
 ```
 
-You should see the matching device nodes as `crw-rw-rw- ...`.
+You should see the matching device nodes with either an ACL for the active
+session or `plugdev` group access.
 
 ---
 
-## Installation (virtual environment)
+## Development installation
 
 ```bash
 cd robobloq-led-linux
@@ -66,7 +90,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 
-# install package in editable mode (recommended for development)
+# install package in editable mode
 pip install -e .
 ```
 
@@ -93,12 +117,6 @@ robobloq-led --dev /dev/hidraw1 --r 255 --g 255 --b 255
 ---
 
 ## Web UI
-
-### Install web dependencies
-
-```bash
-pip install -r requirements.txt
-```
 
 ### Run locally
 
@@ -169,15 +187,24 @@ Example:
 python -m robobloq_led.screen_sync --monitor 2 --fps 40
 ```
 
+## GNOME extension
+
+The extension source is in `gnome-extension/`. Build an installable archive:
+
+```bash
+./package-extension.sh
+```
+
+It creates `dist/dx-light@robobloq-linux.shell-extension.zip`.
+
 ## Project status
 
-The core controller and GNOME extension sources are available here. Portable
-systemd installation and package artifacts are the next packaging milestone.
+The project includes a user-local installer, portable systemd units, and a
+GNOME Shell extension package.
 
 ## Roadmap
 
 - [ ] Single HID writer shared by all synchronization modes
-- [ ] Portable systemd installation
 - [ ] Package releases + GitHub Actions CI
 
 ---

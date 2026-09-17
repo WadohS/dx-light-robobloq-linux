@@ -1,0 +1,13 @@
+[Unit]
+Description=DX-Light local LED controller
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=%t
+ExecStart=%h/.local/share/dx-light-robobloq-linux/venv/bin/python -m uvicorn robobloq_led.webapp:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

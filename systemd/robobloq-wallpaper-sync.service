@@ -1,0 +1,15 @@
+[Unit]
+Description=DX-Light wallpaper synchronization
+After=robobloq-led.service
+Requires=robobloq-led.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/curl --fail --silent --show-error --request POST http://127.0.0.1:8000/api/effect/stop
+ExecStartPre=/usr/bin/sleep 0.2
+ExecStart=%h/.local/share/dx-light-robobloq-linux/venv/bin/python -m robobloq_led.wallpaper_sync --brightness 35
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

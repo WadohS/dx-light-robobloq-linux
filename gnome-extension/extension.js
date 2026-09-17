@@ -53,7 +53,7 @@ export default class RobobloqLedExtension extends Extension {
             text: 'LED',
         }));
 
-        this._sync = new PopupMenu.PopupSwitchMenuItem('Synchroniser le fond d\'ecran', true);
+        this._sync = new PopupMenu.PopupSwitchMenuItem('Synchroniser le fond d\'ecran', false);
         this._sync.connect('toggled', (_item, enabled) => {
             if (enabled)
                 this._startSync();

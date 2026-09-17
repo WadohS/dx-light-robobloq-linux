@@ -1,0 +1,13 @@
+[Unit]
+Description=DX-Light session lock monitor
+After=graphical-session.target robobloq-led.service
+Wants=robobloq-led.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/dx-light-robobloq-linux/venv/bin/python -m robobloq_led.session_monitor
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

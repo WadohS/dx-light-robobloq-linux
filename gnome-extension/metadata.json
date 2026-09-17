@@ -1,7 +1,7 @@
 {
-  "uuid": "robobloq-led@wadohs",
+  "uuid": "dx-light@robobloq-linux",
   "name": "DX-Light Configuration",
   "description": "Configure local DX-Light controllers and screen zones.",
   "shell-version": ["50"],
-  "version": 18
+  "version": 19
 }
