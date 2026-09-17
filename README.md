@@ -205,6 +205,8 @@ GNOME Shell extension package.
 ## Roadmap
 
 - [ ] Single HID writer shared by all synchronization modes
+- [ ] PipeWire audio capture for controller rhythm effects
+- [ ] Translate the GNOME extension and web UI from the system language
 - [ ] Package releases + GitHub Actions CI
 
 ---
