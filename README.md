@@ -1,4 +1,4 @@
-# robobloq-led-linux
+# DX-Light ROBOBLOQ Linux
 
 Control a ROBOBLOQ / QinHeng USB HID ambient LED strip (VID:PID **1a86:fe07**) on Linux (Ubuntu).  
 Includes a simple **web UI** (color picker) and a small **CLI**.
@@ -10,6 +10,12 @@ Includes a simple **web UI** (color picker) and a small **CLI**.
 ## Features
 
 - Set solid colors (RGB)
+- Control multiple connected DX-Light controllers
+- Built-in dynamic effects, controller rhythm presets, and effect speed
+- Per-display LED-zone configuration (left, top, right, bottom)
+- Local FastAPI configuration UI at `http://127.0.0.1:8000`
+- GNOME Shell extension sources in `gnome-extension/`
+- Wallpaper synchronization and session lock actions
 - Works without the vendor Windows app
 - Web UI (FastAPI + simple HTML color picker)
 - Auto-detects the correct vendor HID interface (`06 00 ff` report descriptor)
@@ -163,13 +169,15 @@ Example:
 python -m robobloq_led.screen_sync --monitor 2 --fps 40
 ```
 
+## Project status
+
+The core controller and GNOME extension sources are available here. Portable
+systemd installation and package artifacts are the next packaging milestone.
+
 ## Roadmap
 
-- [ ] Presets (movie / gaming / focus)
-- [ ] Brightness slider (software scaling)
-- [ ] Smooth fade transitions
-- [ ] Effects (rainbow, pulse)
-- [ ] Screen-sync mode (Ambilight-style)
+- [ ] Single HID writer shared by all synchronization modes
+- [ ] Portable systemd installation
 - [ ] Package releases + GitHub Actions CI
 
 ---

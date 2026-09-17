@@ -10,6 +10,15 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Amel Varghese" }]
+dependencies = [
+  "fastapi>=0.131",
+  "mss>=10.1",
+  "numpy>=2.2",
+  "pillow>=12.1",
+  "pipewire-capture>=0.2.9",
+  "pydantic>=2.12",
+  "uvicorn>=0.41",
+]
 
 [project.scripts]
 robobloq-led = "robobloq_led.cli:main"

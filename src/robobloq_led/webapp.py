@@ -4,26 +4,26 @@ import asyncio
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
-from .device import RobobloqController, find_vendor_device
+from pydantic import BaseModel, Field
+from .device import RobobloqControllers, SESSION_LOCK_PATH, discover_vendor_devices, load_layout, save_layout
 
 app = FastAPI(title="Robobloq LED Controller")
 
 # Single controller instance so counter increments properly
-_controller: RobobloqController | None = None
+_controller: RobobloqControllers | None = None
 _current = {"r": 255, "g": 200, "b": 120}  # assume warm-white start
 _fade_task: asyncio.Task | None = None
 _lock = asyncio.Lock()
 _effect_task: asyncio.Task | None = None
 _effect_stop = asyncio.Event()
-_sync_task: asyncio.Task | None = None
+_dxlight_effect: int | None = None
+_sync_tasks: list[asyncio.Task] = []
 _sync_stop = asyncio.Event()
 
-def get_controller() -> RobobloqController:
+def get_controller() -> RobobloqControllers:
     global _controller
     if _controller is None:
-        dev = find_vendor_device()
-        _controller = RobobloqController(dev=dev)
+        _controller = RobobloqControllers()
     return _controller
 
 class Color(BaseModel):
@@ -47,6 +47,45 @@ class EffectRequest(BaseModel):
     g: int | None = None
     b: int | None = None
     brightness: int | None = 100
+
+class SpeedRequest(BaseModel):
+    speed: int
+
+class LedCountRequest(BaseModel):
+    count: int
+
+
+class ZoneLayout(BaseModel):
+    left: int
+    top: int
+    right: int
+    bottom: int = 0
+
+
+class DisplayLayout(BaseModel):
+    device: str
+    screen: str
+    location: str
+    installation_direction: str
+    sync_area: str
+    edge_count: int
+    zones: ZoneLayout
+
+
+class SessionAction(BaseModel):
+    mode: str
+    effect: str = "dxlight-dynamix"
+
+
+class SessionBehavior(BaseModel):
+    lock: SessionAction = Field(default_factory=lambda: SessionAction(mode="off"))
+    unlock: SessionAction = Field(default_factory=lambda: SessionAction(mode="sync"))
+
+
+class LayoutRequest(BaseModel):
+    version: int = 2
+    session: SessionBehavior = Field(default_factory=SessionBehavior)
+    displays: list[DisplayLayout]
 
 class SyncStartRequest(BaseModel):
     monitor: int = 2
@@ -79,12 +118,20 @@ def cancel_effect():
     _effect_task = None
     _effect_stop.clear()
 
+def stop_dxlight_effect():
+    global _dxlight_effect
+    # The controller keeps running an effect across API restarts, so always
+    # send its stop command instead of relying on the in-memory state.
+    get_controller().stop_dxlight_effect()
+    _dxlight_effect = None
+
 def cancel_sync():
-    global _sync_task
-    if _sync_task and not _sync_task.done():
+    global _sync_tasks
+    if any(not task.done() for task in _sync_tasks):
         _sync_stop.set()
-        _sync_task.cancel()
-    _sync_task = None
+        for task in _sync_tasks:
+            task.cancel()
+    _sync_tasks = []
     _sync_stop.clear()
 
 def wheel(pos: int) -> tuple[int, int, int]:
@@ -152,6 +199,73 @@ async def effect_rainbow(speed: int):
             j = (j + 1) % 256
             await asyncio.sleep(delay)
 
+async def effect_directional_rainbow(speed: int):
+    """Move a rainbow through every LED, following each strip's physical direction."""
+    controllers = get_controller().controllers
+    displays = load_layout()["displays"]
+    speed = clamp(speed, 1, 100)
+    delay = 0.20 - (speed - 1) * (0.16 / 99.0)
+    phase = 0
+
+    async with _lock:
+        while not _effect_stop.is_set():
+            for controller, display in zip(controllers, displays):
+                zones = display["zones"]
+                led_count = sum(zones.values())
+                zone_size = min(6, led_count)
+                zone_count = (led_count + zone_size - 1) // zone_size
+                direction = -1 if display["installation_direction"] == "right-to-left" else 1
+                pixels = [wheel(phase + direction * (led // zone_size) * 256 // zone_count) for led in range(led_count)]
+                await asyncio.to_thread(controller.set_pixels, pixels)
+            phase = (phase + 6) % 256
+            await asyncio.sleep(delay)
+
+async def effect_rainbow_chase(speed: int):
+    controllers = get_controller().controllers
+    displays = load_layout()["displays"]
+    speed = clamp(speed, 1, 100)
+    delay = 0.20 - (speed - 1) * (0.16 / 99.0)
+    position = 0
+
+    async with _lock:
+        while not _effect_stop.is_set():
+            for controller, display in zip(controllers, displays):
+                zones = display["zones"]
+                led_count = sum(zones.values())
+                zone_size = min(6, led_count)
+                zone_count = (led_count + zone_size - 1) // zone_size
+                active = position if display["installation_direction"] == "left-to-right" else zone_count - 1 - position
+                pixels = [(0, 0, 0)] * led_count
+                color = wheel(position * 256 // zone_count)
+                first = active * zone_size
+                pixels[first : first + zone_size] = [color] * min(zone_size, led_count - first)
+                await asyncio.to_thread(controller.set_pixels, pixels)
+            position = (position + 1) % max((sum(display["zones"].values()) + 5) // 6 for display in displays)
+            await asyncio.sleep(delay)
+
+async def effect_aurora_wave(speed: int):
+    controllers = get_controller().controllers
+    displays = load_layout()["displays"]
+    speed = clamp(speed, 1, 100)
+    delay = 0.20 - (speed - 1) * (0.16 / 99.0)
+    phase = 0
+
+    async with _lock:
+        while not _effect_stop.is_set():
+            for controller, display in zip(controllers, displays):
+                zones = display["zones"]
+                led_count = sum(zones.values())
+                zone_size = min(6, led_count)
+                zone_count = (led_count + zone_size - 1) // zone_size
+                direction = -1 if display["installation_direction"] == "right-to-left" else 1
+                pixels = []
+                for led in range(led_count):
+                    level = (phase + direction * (led // zone_size) * 256 // zone_count) % 256
+                    pixels.append((0, level // 2, 40 + level * 3 // 4))
+                await asyncio.to_thread(controller.set_pixels, pixels)
+            phase = (phase + 8) % 256
+            await asyncio.sleep(delay)
+
 async def fade_to(target: dict, duration_ms: int, steps: int):
     ctl = get_controller()
     duration_ms = clamp(duration_ms, 0, 60_000)
@@ -171,8 +285,7 @@ async def fade_to(target: dict, duration_ms: int, steps: int):
 
             await asyncio.sleep(duration_ms / steps / 1000.0)
 
-async def screen_sync_loop(cfg: SyncStartRequest):
-    ctl = get_controller()
+async def screen_sync_loop(cfg: SyncStartRequest, ctl):
 
     fps = clamp(cfg.fps, 1, 120)
     thickness = clamp(cfg.thickness, 1, 400)
@@ -212,34 +325,35 @@ async def screen_sync_loop(cfg: SyncStartRequest):
 
         mon = sct.monitors[cfg.monitor]
 
-        # Keep sync exclusive with other LED writers
-        async with _lock:
-            while not _sync_stop.is_set():
-                start = time.time()
+        while not _sync_stop.is_set():
+            start = time.time()
+            if SESSION_LOCK_PATH.exists():
+                await asyncio.sleep(dt)
+                continue
 
-                frame = np.array(sct.grab(mon))[:, :, :3][:, :, ::-1]  # RGB
-                img = frame[::down, ::down, :]  # downscale for speed
+            frame = np.array(sct.grab(mon))[:, :, :3][:, :, ::-1]  # RGB
+            img = frame[::down, ::down, :]  # downscale for speed
 
-                l, tcol, r = avg_edge_color(img, thickness_px=thickness)
-                target = combine_edges(l, tcol, r)
+            l, tcol, r = avg_edge_color(img, thickness_px=thickness)
+            target = combine_edges(l, tcol, r)
 
-                # smoothing
-                smooth = (1.0 - alpha) * smooth + alpha * target.astype(np.float32)
-                rgb = tuple(np.clip(smooth, 0, 255).astype(int))
+            # smoothing
+            smooth = (1.0 - alpha) * smooth + alpha * target.astype(np.float32)
+            rgb = tuple(np.clip(smooth, 0, 255).astype(int))
 
-                # reduce USB spam
-                if sum(abs(a - b) for a, b in zip(rgb, last_rgb)) > change_thr:
-                    ctl.set_color(*rgb)
-                    _current["r"], _current["g"], _current["b"] = rgb
-                    last_rgb = rgb
+            # reduce USB spam
+            if not SESSION_LOCK_PATH.exists() and sum(abs(a - b) for a, b in zip(rgb, last_rgb)) > change_thr:
+                ctl.set_color(*rgb)
+                _current["r"], _current["g"], _current["b"] = rgb
+                last_rgb = rgb
 
-                elapsed = time.time() - start
-                sleep_for = dt - elapsed
-                if sleep_for > 0:
-                    await asyncio.sleep(sleep_for)
-                else:
-                    # if we’re slower than target FPS, yield control
-                    await asyncio.sleep(0)
+            elapsed = time.time() - start
+            sleep_for = dt - elapsed
+            if sleep_for > 0:
+                await asyncio.sleep(sleep_for)
+            else:
+                # If capture takes longer than one frame, yield to the other monitor task.
+                await asyncio.sleep(0)
 
 
 HTML_PAGE = r"""
@@ -248,7 +362,7 @@ HTML_PAGE = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Robobloq LED</title>
+  <title>DX-Light Configuration</title>
   <style>
     :root{
       --bg:#0b0f17;
@@ -306,8 +420,12 @@ HTML_PAGE = r"""
     .label{min-width:92px;font-size:13px;color:var(--muted)}
     .value{min-width:70px;font-size:13px}
     input[type=range]{width:280px;accent-color:var(--accent)}
+    select,input[type=number]{color:var(--text);background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px}
+    .config-grid{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:10px;margin-top:10px}
+    .config-field{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px;border:1px solid var(--border);border-radius:10px;background:var(--card2);font-size:13px}
+    @media(max-width:560px){.config-grid{grid-template-columns:1fr}}
     .presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-    .preset{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:999px;border:1px solid var(--border);background:var(--card2);cursor:pointer;font-size:13px}
+    .preset{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:999px;border:1px solid var(--border);background:var(--card2);color:var(--text);cursor:pointer;font-size:13px}
     .dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(255,255,255,.22);flex:none}
     .toast{margin-top:12px;padding:10px 12px;border-radius:14px;border:1px solid var(--border);background:rgba(0,0,0,.18);color:var(--muted);min-height:44px;display:flex;align-items:center;justify-content:space-between;gap:10px;backdrop-filter:blur(10px)}
     @media (prefers-color-scheme: light){ .toast{background:rgba(255,255,255,.55)} }
@@ -324,8 +442,8 @@ HTML_PAGE = r"""
       <div class="brand">
         <div class="logo"></div>
         <div>
-          <h1>Robobloq LED</h1>
-          <div class="sub">Linux web controller (1a86:fe07)</div>
+          <h1>DX-Light Configuration</h1>
+          <div class="sub">Contrôleur local Linux (1a86:fe07)</div>
         </div>
       </div>
       <div class="pill" id="conn">Ready</div>
@@ -336,6 +454,7 @@ HTML_PAGE = r"""
         <div class="tab active" id="tab-colors" onclick="showTab('colors')">Colors</div>
         <div class="tab" id="tab-effects" onclick="showTab('effects')">Effects</div>
         <div class="tab" id="tab-sync" onclick="showTab('sync')">Sync</div>
+        <div class="tab" id="tab-config" onclick="showTab('config')">Configuration</div>
       </div>
 
       <!-- Colors tab -->
@@ -387,14 +506,40 @@ HTML_PAGE = r"""
       <div id="panel-effects" class="hidden">
         <div class="row">
           <div class="label">Effect</div>
-          <div class="preset" onclick="selectEffect('pulse')" id="eff-pulse"><span class="dot" style="background:#ffc878"></span>Pulse</div>
-          <div class="preset" onclick="selectEffect('rainbow')" id="eff-rainbow"><span class="dot" style="background:#0a84ff"></span>Rainbow</div>
+          <button class="preset" data-effect="pulse" onclick="selectEffect('pulse')"><span class="dot" style="background:#ffc878"></span>Pulse</button>
+          <button class="preset" data-effect="rainbow" onclick="selectEffect('rainbow')"><span class="dot" style="background:#0a84ff"></span>Rainbow</button>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="label">Effets DX-Light</div>
+        <div class="presets">
+          <button class="preset" data-effect="dxlight-dynamix" onclick="selectEffect('dxlight-dynamix')">Dynamix</button>
+          <button class="preset" data-effect="dxlight-serpentin" onclick="selectEffect('dxlight-serpentin')">Serpentin</button>
+          <button class="preset" data-effect="dxlight-feu" onclick="selectEffect('dxlight-feu')">Feu</button>
+          <button class="preset" data-effect="dxlight-4" onclick="selectEffect('dxlight-4')">Météore</button>
+          <button class="preset" data-effect="dxlight-5" onclick="selectEffect('dxlight-5')">Scintillement</button>
+          <button class="preset" data-effect="dxlight-6" onclick="selectEffect('dxlight-6')">Dégradé</button>
+          <button class="preset" data-effect="dxlight-7" onclick="selectEffect('dxlight-7')">Défilement</button>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="label">Rythme contrôleur</div>
+        <div class="presets">
+          <button class="preset" data-effect="dxlight-rhythm-0" onclick="selectEffect('dxlight-rhythm-0')">Onde</button>
+          <button class="preset" data-effect="dxlight-rhythm-1" onclick="selectEffect('dxlight-rhythm-1')">Pulsation</button>
+          <button class="preset" data-effect="dxlight-rhythm-2" onclick="selectEffect('dxlight-rhythm-2')">Spectre</button>
+          <button class="preset" data-effect="dxlight-rhythm-3" onclick="selectEffect('dxlight-rhythm-3')">Flash</button>
+          <button class="preset" data-effect="dxlight-rhythm-4" onclick="selectEffect('dxlight-rhythm-4')">Dégradé</button>
+          <button class="preset" data-effect="dxlight-rhythm-5" onclick="selectEffect('dxlight-rhythm-5')">Chenillard</button>
+          <button class="preset" data-effect="dxlight-rhythm-6" onclick="selectEffect('dxlight-rhythm-6')">Arc-en-ciel</button>
         </div>
 
         <div style="height:12px"></div>
 
         <div class="row">
-          <div class="label">Speed</div>
+          <div class="label">Vitesse DX-Light</div>
           <input id="speed" type="range" min="1" max="100" value="50" oninput="syncLabels()">
           <div class="value" id="speedVal">50</div>
         </div>
@@ -466,6 +611,11 @@ HTML_PAGE = r"""
         </div>
       </div>
 
+      <div id="panel-config" class="hidden">
+        <div class="hint">La même configuration est utilisée par les préférences GNOME. Un bandeau est découpé en trois ou quatre zones autour de son écran.</div>
+        <div id="configRoot" class="hint">Chargement de la configuration DX-Light…</div>
+      </div>
+
       <div class="toast">
         <div><strong>Status:</strong> <span id="status">Ready.</span></div>
         <div><span id="mini">Brightness 100% • Fade 800ms • Speed 50</span></div>
@@ -489,10 +639,100 @@ function showTab(name){
   document.getElementById("panel-colors").classList.toggle("hidden", name !== "colors");
   document.getElementById("panel-effects").classList.toggle("hidden", name !== "effects");
   document.getElementById("panel-sync").classList.toggle("hidden", name !== "sync");
+  document.getElementById("panel-config").classList.toggle("hidden", name !== "config");
 
   document.getElementById("tab-colors").classList.toggle("active", name === "colors");
   document.getElementById("tab-effects").classList.toggle("active", name === "effects");
   document.getElementById("tab-sync").classList.toggle("active", name === "sync");
+  document.getElementById("tab-config").classList.toggle("active", name === "config");
+  if (name === "config") loadConfiguration();
+}
+
+async function configRequest(method, url, body = null) {
+  const options = {method, headers: {"Content-Type": "application/json"}};
+  if (body !== null) options.body = JSON.stringify(body);
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Erreur de configuration");
+  return data;
+}
+
+function configOption(value, label, selected) {
+  return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
+}
+
+function sessionEffectOptions(selected) {
+  const effects = [
+    ["dxlight-dynamix", "Dynamix"], ["dxlight-serpentin", "Serpentin"], ["dxlight-feu", "Feu"],
+    ["dxlight-4", "Météore"], ["dxlight-5", "Scintillement"], ["dxlight-6", "Dégradé"], ["dxlight-7", "Défilement"],
+    ...Array.from({length: 7}, (_value, index) => [`dxlight-rhythm-${index}`, `Rythme ${index + 1}`]),
+  ];
+  return effects.map(([value, label]) => configOption(value, label, selected)).join("");
+}
+
+async function loadConfiguration() {
+  const root = document.getElementById("configRoot");
+  root.textContent = "Chargement de la configuration DX-Light…";
+  try {
+    const [deviceResponse, layoutResponse] = await Promise.all([
+      configRequest("GET", "/api/devices"), configRequest("GET", "/api/layout")
+    ]);
+    const devices = deviceResponse.devices;
+    const session = layoutResponse.layout.session;
+    const sessionAction = (phase, action, title) => `<label class="config-field">${title}<select id="session-${phase}-mode" onchange="updateSessionEffect('${phase}')">${configOption("off", "Éteindre", action.mode)}${configOption("sync", "Sync fond", action.mode)}${configOption("effect", "Effet DX-Light", action.mode)}</select></label><label class="config-field">${title} : effet<select id="session-${phase}-effect">${sessionEffectOptions(action.effect)}</select></label>`;
+    root.innerHTML = layoutResponse.layout.displays.map((display, index) => {
+      const deviceOptions = devices.map(device => configOption(device, device.replace("/dev/input/by-path/", "USB "), display.device)).join("");
+      const zone = (name, title) => `<label class="config-field">${title}<input id="zone-${index}-${name}" type="number" min="0" max="254" value="${display.zones[name]}"></label>`;
+      return `<div class="card" style="margin-top:12px"><strong>Écran ${display.screen === "right" ? "droit" : "gauche"}</strong>
+        <div class="config-grid">
+          <label class="config-field">Contrôleur<select id="device-${index}">${deviceOptions}</select></label>
+          <label class="config-field">Écran<select id="screen-${index}">${configOption("left", "Gauche", display.screen)}${configOption("right", "Droit", display.screen)}</select></label>
+          <label class="config-field">Pose<select id="location-${index}">${configOption("back", "Derrière l’écran", display.location)}${configOption("top", "Au-dessus", display.location)}${configOption("bottom", "Sous l’écran", display.location)}${configOption("left", "À gauche", display.location)}${configOption("right", "À droite", display.location)}</select></label>
+          <label class="config-field">Arrivée LEDs<select id="direction-${index}">${configOption("left-to-right", "Gauche vers droite", display.installation_direction)}${configOption("right-to-left", "Droite vers gauche", display.installation_direction)}</select></label>
+          <label class="config-field">Prélèvement<select id="sync-area-${index}">${configOption("edge", "Bord de l’écran", display.sync_area)}${configOption("center", "Centre de l’écran", display.sync_area)}</select></label>
+          <label class="config-field">Zones<select id="edge-count-${index}" onchange="updateBottomZone(${index})">${configOption("3", "3 côtés", String(display.edge_count))}${configOption("4", "4 côtés", String(display.edge_count))}</select></label>
+          ${zone("left", "LEDs gauche")}${zone("top", "LEDs haut")}${zone("right", "LEDs droite")}${zone("bottom", "LEDs bas")}
+        </div></div>`;
+    }).join("") + `<div class="card" style="margin-top:12px"><strong>Session GNOME</strong><div class="config-grid">${sessionAction("lock", session.lock, "Au verrouillage")}${sessionAction("unlock", session.unlock, "Au déverrouillage")}</div></div><div class="row" style="margin-top:12px"><button class="btn primary" onclick="saveConfiguration(${layoutResponse.layout.displays.length})">Appliquer</button></div>`;
+    layoutResponse.layout.displays.forEach((_display, index) => updateBottomZone(index));
+    updateSessionEffect("lock");
+    updateSessionEffect("unlock");
+  } catch (error) {
+    root.textContent = error.message;
+  }
+}
+
+function updateBottomZone(index) {
+  const bottom = document.getElementById(`zone-${index}-bottom`);
+  const enabled = document.getElementById(`edge-count-${index}`).value === "4";
+  bottom.disabled = !enabled;
+  if (!enabled) bottom.value = 0;
+}
+
+function updateSessionEffect(phase) {
+  document.getElementById(`session-${phase}-effect`).disabled = document.getElementById(`session-${phase}-mode`).value !== "effect";
+}
+
+async function saveConfiguration(count) {
+  try {
+    const displays = Array.from({length: count}, (_value, index) => ({
+      device: document.getElementById(`device-${index}`).value,
+      screen: document.getElementById(`screen-${index}`).value,
+      location: document.getElementById(`location-${index}`).value,
+      installation_direction: document.getElementById(`direction-${index}`).value,
+      sync_area: document.getElementById(`sync-area-${index}`).value,
+      edge_count: parseInt(document.getElementById(`edge-count-${index}`).value, 10),
+      zones: Object.fromEntries(["left", "top", "right", "bottom"].map(name => [name, parseInt(document.getElementById(`zone-${index}-${name}`).value, 10)])),
+    }));
+    const sessionAction = phase => ({
+      mode: document.getElementById(`session-${phase}-mode`).value,
+      effect: document.getElementById(`session-${phase}-effect`).value,
+    });
+    await configRequest("PUT", "/api/layout", {version: 2, displays, session: {lock: sessionAction("lock"), unlock: sessionAction("unlock")}});
+    setStatus("Configuration DX-Light appliquée.");
+  } catch (error) {
+    setStatus(`Erreur : ${error.message}`);
+  }
 }
 
 function hexToRgb(hex) {
@@ -595,8 +835,9 @@ function preset(hex, name){
 
 function selectEffect(name){
   selectedEffect = name;
-  document.getElementById("eff-pulse").style.borderColor = (name === "pulse") ? "rgba(106,228,255,.35)" : "";
-  document.getElementById("eff-rainbow").style.borderColor = (name === "rainbow") ? "rgba(106,228,255,.35)" : "";
+  document.querySelectorAll("[data-effect]").forEach(button => {
+    button.style.borderColor = button.dataset.effect === name ? "rgba(106,228,255,.7)" : "";
+  });
   setStatus(`Effect selected: ${name}`);
 }
 
@@ -612,6 +853,9 @@ async function startEffect(){
   if (selectedEffect === "pulse"){
     payload = { ...payload, ...rgb, brightness: b };
   }
+
+  if (selectedEffect.startsWith("dxlight-") && !selectedEffect.startsWith("dxlight-rhythm-"))
+    await postJson("/api/dxlight/speed", {speed: s});
 
   const {ok, data} = await postJson("/api/effect/start", payload);
   setStatus(ok ? `Effect running: ${selectedEffect} (speed ${s})` : `Error: ${data.detail || "unknown"}`);
@@ -634,8 +878,9 @@ def set_color_api(c: Color):
     cancel_fade()
     cancel_sync()
     cancel_effect()
+    stop_dxlight_effect()
 
-    brightness = clamp(c.brightness or 100, 0, 100)
+    brightness = clamp(100 if c.brightness is None else c.brightness, 0, 100)
     r, g, b = apply_brightness(clamp(c.r,0,255), clamp(c.g,0,255), clamp(c.b,0,255), brightness)
 
     ctl.set_color(r, g, b)
@@ -647,8 +892,9 @@ async def fade_api(req: FadeRequest):
     cancel_fade()
     cancel_sync()
     cancel_effect()
+    stop_dxlight_effect()
 
-    brightness = clamp(req.brightness or 100, 0, 100)
+    brightness = clamp(100 if req.brightness is None else req.brightness, 0, 100)
     r, g, b = apply_brightness(clamp(req.r,0,255), clamp(req.g,0,255), clamp(req.b,0,255), brightness)
     target = {"r": r, "g": g, "b": b}
 
@@ -661,16 +907,43 @@ async def effect_start(req: EffectRequest):
     cancel_fade()
     cancel_sync()
     cancel_effect()
+    stop_dxlight_effect()
 
     eff = (req.effect or "").lower().strip()
     speed = clamp(req.speed, 1, 100)
 
-    global _effect_task
+    global _effect_task, _dxlight_effect
+    dxlight_effects = {
+        "dxlight-dynamix": 0,
+        "dxlight-serpentin": 1,
+        "dxlight-feu": 2,
+        "dxlight-4": 3,
+        "dxlight-5": 4,
+        "dxlight-6": 5,
+        "dxlight-7": 6,
+    }
+    if eff in dxlight_effects:
+        effect_id = dxlight_effects[eff]
+        get_controller().set_dxlight_effect(effect_id)
+        _dxlight_effect = effect_id
+        return JSONResponse({"ok": True, "effect": eff, "effect_id": effect_id, "mode": "dxlight"})
+
+    if eff.startswith("dxlight-rhythm-"):
+        try:
+            rhythm_id = int(eff.removeprefix("dxlight-rhythm-"))
+        except ValueError:
+            rhythm_id = -1
+        if not 0 <= rhythm_id <= 6:
+            raise HTTPException(status_code=400, detail="DX-Light rhythm ID must be between 0 and 6.")
+        get_controller().set_dxlight_rhythm(rhythm_id)
+        _dxlight_effect = rhythm_id
+        return JSONResponse({"ok": True, "effect": eff, "rhythm_id": rhythm_id, "mode": "dxlight-rhythm"})
+
     if eff == "pulse":
         # Use chosen color (with brightness)
         if req.r is None or req.g is None or req.b is None:
             raise HTTPException(status_code=400, detail="pulse requires r,g,b")
-        brightness = clamp(req.brightness or 100, 0, 100)
+        brightness = clamp(100 if req.brightness is None else req.brightness, 0, 100)
         r, g, b = apply_brightness(clamp(req.r,0,255), clamp(req.g,0,255), clamp(req.b,0,255), brightness)
         base = {"r": r, "g": g, "b": b}
         _effect_task = asyncio.create_task(effect_pulse(base, speed))
@@ -679,6 +952,19 @@ async def effect_start(req: EffectRequest):
     elif eff == "rainbow":
         _effect_task = asyncio.create_task(effect_rainbow(speed))
         return JSONResponse({"ok": True, "effect": "rainbow", "speed": speed})
+    elif eff == "directional-rainbow":
+        _effect_task = asyncio.create_task(effect_directional_rainbow(speed))
+        return JSONResponse({"ok": True, "effect": "directional-rainbow", "speed": speed})
+    elif eff == "rainbow-chase":
+        _effect_task = asyncio.create_task(effect_rainbow_chase(speed))
+        return JSONResponse({"ok": True, "effect": "rainbow-chase", "speed": speed})
+    elif eff == "aurora-wave":
+        _effect_task = asyncio.create_task(effect_aurora_wave(speed))
+        return JSONResponse({"ok": True, "effect": "aurora-wave", "speed": speed})
+    elif eff == "breathing":
+        base = apply_brightness(req.r if req.r is not None else 255, req.g if req.g is not None else 200, req.b if req.b is not None else 120, req.brightness if req.brightness is not None else 100)
+        _effect_task = asyncio.create_task(effect_pulse(dict(zip(("r", "g", "b"), base)), speed))
+        return JSONResponse({"ok": True, "effect": "breathing", "speed": speed})
 
     raise HTTPException(status_code=400, detail="Unknown effect. Use 'pulse' or 'rainbow'.")
 
@@ -687,11 +973,15 @@ async def sync_start(req: SyncStartRequest):
     # Stop other modes
     cancel_fade()
     cancel_effect()
+    stop_dxlight_effect()
     cancel_sync()
 
-    global _sync_task
+    global _sync_tasks
     try:
-        _sync_task = asyncio.create_task(screen_sync_loop(req))
+        _sync_tasks = []
+        for index, controller in enumerate(get_controller().controllers):
+            config = req.model_copy(update={"monitor": req.monitor + index})
+            _sync_tasks.append(asyncio.create_task(screen_sync_loop(config, controller)))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -699,6 +989,7 @@ async def sync_start(req: SyncStartRequest):
         "ok": True,
         "mode": "sync",
         "config": req.model_dump(),
+        "controllers": len(_sync_tasks),
     })
 
 @app.post("/api/sync/stop")
@@ -709,10 +1000,12 @@ def sync_stop():
 @app.get("/api/status")
 def status():
     mode = "manual"
-    if _sync_task and not _sync_task.done():
+    if any(not task.done() for task in _sync_tasks):
         mode = "sync"
     elif _effect_task and not _effect_task.done():
         mode = "effect"
+    elif _dxlight_effect is not None:
+        mode = "dxlight-effect"
     elif _fade_task and not _fade_task.done():
         mode = "fade"
     return JSONResponse({"ok": True, "mode": mode, "current": _current})
@@ -721,7 +1014,79 @@ def status():
 def effect_stop():
     cancel_sync()
     cancel_effect()
+    stop_dxlight_effect()
     return JSONResponse({"ok": True})
+
+@app.post("/api/dxlight/speed")
+def dxlight_speed(req: SpeedRequest):
+    speed = clamp(req.speed, 0, 100)
+    get_controller().set_dxlight_speed(speed)
+    return JSONResponse({"ok": True, "speed": speed})
+
+@app.post("/api/dxlight/led-count")
+def dxlight_led_count(req: LedCountRequest):
+    count = clamp(req.count, 1, 254)
+    get_controller().set_led_count(count)
+    return JSONResponse({"ok": True, "count": count})
+
+
+@app.get("/api/devices")
+def devices():
+    return JSONResponse({"ok": True, "devices": discover_vendor_devices()})
+
+
+@app.get("/api/layout")
+def layout():
+    return JSONResponse({"ok": True, "layout": load_layout()})
+
+
+@app.put("/api/layout")
+def update_layout(req: LayoutRequest):
+    if not req.displays:
+        raise HTTPException(status_code=400, detail="At least one connected display is required.")
+    valid_effects = {
+        "dxlight-dynamix", "dxlight-serpentin", "dxlight-feu", "dxlight-4", "dxlight-5", "dxlight-6", "dxlight-7",
+        *(f"dxlight-rhythm-{index}" for index in range(7)),
+    }
+    for action in (req.session.lock, req.session.unlock):
+        if action.mode not in {"off", "sync", "effect"}:
+            raise HTTPException(status_code=400, detail="Invalid session action.")
+        if action.mode == "effect" and action.effect not in valid_effects:
+            raise HTTPException(status_code=400, detail="Invalid session effect.")
+
+    available = set(discover_vendor_devices())
+    devices = [display.device for display in req.displays]
+    if any(device not in available for device in devices):
+        raise HTTPException(status_code=400, detail="A selected controller is no longer connected.")
+    if len(set(devices)) != len(devices):
+        raise HTTPException(status_code=400, detail="Each display must use a different controller.")
+    if any(display.screen not in {"left", "right"} for display in req.displays):
+        raise HTTPException(status_code=400, detail="Screen must be left or right.")
+    if any(display.location not in {"back", "top", "bottom", "left", "right"} for display in req.displays):
+        raise HTTPException(status_code=400, detail="Invalid installation location.")
+    if any(display.installation_direction not in {"left-to-right", "right-to-left"} for display in req.displays):
+        raise HTTPException(status_code=400, detail="Invalid installation direction.")
+    if any(display.sync_area not in {"edge", "center"} for display in req.displays):
+        raise HTTPException(status_code=400, detail="Invalid synchronization area.")
+    for display in req.displays:
+        zones = display.zones
+        if display.edge_count not in {3, 4}:
+            raise HTTPException(status_code=400, detail="A strip must use three or four sides.")
+        if display.edge_count == 3 and zones.bottom != 0:
+            raise HTTPException(status_code=400, detail="The bottom zone must be zero with three sides.")
+        if any(count < 0 for count in (zones.left, zones.top, zones.right, zones.bottom)):
+            raise HTTPException(status_code=400, detail="Zone LED counts cannot be negative.")
+        if not 1 <= sum((zones.left, zones.top, zones.right, zones.bottom)) <= 254:
+            raise HTTPException(status_code=400, detail="Each strip must contain between 1 and 254 LEDs.")
+
+    layout = req.model_dump()
+    save_layout(layout)
+    global _controller
+    _controller = None
+    for controller, display in zip(get_controller().controllers, req.displays):
+        zones = display.zones
+        controller.set_led_count(sum((zones.left, zones.top, zones.right, zones.bottom)))
+    return JSONResponse({"ok": True, "layout": layout})
 
 @app.post("/api/off")
 def off_api():
@@ -729,6 +1094,7 @@ def off_api():
     cancel_fade()
     cancel_sync()
     cancel_effect()
+    stop_dxlight_effect()
     ctl.set_color(0, 0, 0)
     _current["r"], _current["g"], _current["b"] = 0, 0, 0
     return JSONResponse({"ok": True})
@@ -738,4 +1104,5 @@ def stop_api():
     cancel_fade()
     cancel_sync()
     cancel_effect()
+    stop_dxlight_effect()
     return JSONResponse({"ok": True})
