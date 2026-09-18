@@ -52,24 +52,27 @@ function discoverDevices() {
     const directoryPath = '/dev/input/by-path';
     const devices = [];
     try {
-        const directory = GLib.dir_open(directoryPath, 0);
-        let name;
-        while ((name = directory.read_name()) !== null) {
+        const directory = Gio.File.new_for_path(directoryPath);
+        const entries = directory.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+        let entry;
+        while ((entry = entries.next_file(null)) !== null) {
+            const name = entry.get_name();
             if (!name.endsWith('-hidraw'))
                 continue;
             const link = GLib.build_filenamev([directoryPath, name]);
-            if (!GLib.file_test(link, GLib.FileTest.IS_SYMLINK))
-                continue;
             const target = GLib.canonicalize_filename(GLib.file_read_link(link), directoryPath);
             if (!/^\/dev\/hidraw\d+$/.test(target) || !GLib.file_test(target, GLib.FileTest.EXISTS) || !isVendorDevice(target))
                 continue;
-            devices.push(link);
+            devices.push({link, target});
         }
-        directory.close();
+        entries.close(null);
     } catch (_error) {
         // An absent by-path directory simply means no stable controller links are available.
     }
-    return devices.sort();
+    const selected = new Set();
+    return devices.sort((first, second) => first.link.includes('-usbv') - second.link.includes('-usbv'))
+        .filter(device => !selected.has(device.target) && selected.add(device.target))
+        .map(device => device.link);
 }
 
 function defaultLayout(devices) {
