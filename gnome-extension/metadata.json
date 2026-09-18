@@ -3,5 +3,5 @@
   "name": "DX-Light Configuration",
   "description": "Configure local DX-Light controllers and screen zones.",
   "shell-version": ["50"],
-  "version": 36
+  "version": 37
 }

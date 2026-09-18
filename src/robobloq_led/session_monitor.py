@@ -5,7 +5,6 @@ from .device import SESSION_LOCK_PATH, load_layout
 
 BUS_NAME = "io.github.wadohs.RobobloqLed"
 OBJECT_PATH = "/io/github/wadohs/RobobloqLed"
-WALLPAPER_SYNC_SERVICE = "robobloq-wallpaper-sync.service"
 HARDWARE_EFFECTS = {
     "dxlight-dynamix": 0,
     "dxlight-serpentin": 1,
@@ -28,10 +27,6 @@ def daemon_call(method: str, *arguments: int) -> None:
     )
 
 
-def set_wallpaper_sync(enabled: bool) -> None:
-    subprocess.run(["systemctl", "--user", "start" if enabled else "stop", WALLPAPER_SYNC_SERVICE], check=False)
-
-
 def set_session_locked(locked: bool) -> None:
     if locked:
         SESSION_LOCK_PATH.touch()
@@ -42,13 +37,12 @@ def set_session_locked(locked: bool) -> None:
 def apply_action(action: dict) -> None:
     mode = action.get("mode", "off")
     if mode == "off":
-        set_wallpaper_sync(False)
         daemon_call("Off")
     elif mode == "sync":
-        daemon_call("Stop")
-        set_wallpaper_sync(True)
+        # Wallpaper synchronization is owned by the GNOME extension, so a lock
+        # transition must not start a second independent HID writer.
+        pass
     elif mode == "effect":
-        set_wallpaper_sync(False)
         effect = action.get("effect", "dxlight-dynamix")
         if effect in HARDWARE_EFFECTS:
             daemon_call("StartHardwareEffect", HARDWARE_EFFECTS[effect])

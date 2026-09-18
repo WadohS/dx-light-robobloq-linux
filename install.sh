@@ -19,7 +19,11 @@ python3 -m venv --system-site-packages "$VENV_DIR"
 mkdir -p "$SYSTEMD_DIR"
 install -m 0644 "$ROOT_DIR/systemd/robobloq-led.service" "$SYSTEMD_DIR/robobloq-led.service"
 install -m 0644 "$ROOT_DIR/systemd/robobloq-session-monitor.service" "$SYSTEMD_DIR/robobloq-session-monitor.service"
-install -m 0644 "$ROOT_DIR/systemd/robobloq-wallpaper-sync.service" "$SYSTEMD_DIR/robobloq-wallpaper-sync.service"
+
+# Remove the legacy independent wallpaper writer. GNOME Shell owns wallpaper
+# synchronization through the local D-Bus daemon.
+systemctl --user disable --now robobloq-wallpaper-sync.service 2>/dev/null || true
+rm -f "$SYSTEMD_DIR/robobloq-wallpaper-sync.service"
 
 "$ROOT_DIR/package-extension.sh"
 gnome-extensions install --force "$ROOT_DIR/dist/$EXTENSION_UUID.shell-extension.zip"

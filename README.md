@@ -36,13 +36,8 @@ The installer creates a user-local Python environment, installs the GNOME
 extension, and enables the D-Bus daemon plus the lock-session monitor. Log out
 and back in before using the panel extension.
 
-Wallpaper synchronization is optional because it expects a composite wallpaper
-at `~/.local/share/dual-wallpaper/wallpaper-composite.jpg`, such as the one
-created by [Dual Desktop](https://github.com/WadohS/dual-desktop):
-
-```bash
-systemctl --user enable --now robobloq-wallpaper-sync.service
-```
+Wallpaper synchronization is controlled from the GNOME panel extension. It
+uses the configured desktop wallpaper and does not run an independent service.
 
 ---
 
