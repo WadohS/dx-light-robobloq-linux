@@ -4,7 +4,7 @@ import Gtk from 'gi://Gtk';
 import GLib from 'gi://GLib';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const LAYOUT_PATH = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'robobloq-led', 'layout.json']);
+const API_URL = 'http://127.0.0.1:8000';
 const EN = {
     'DX-Light Configuration': 'DX-Light Configuration', 'Chargement des contrôleurs...': 'Loading controllers...',
     'Service LED indisponible': 'LED service unavailable', 'Démarre robobloq-led.service puis rouvre cette fenêtre.': 'Start robobloq-led.service, then reopen this window.',
@@ -21,101 +21,26 @@ const EN = {
 };
 const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const EDGE_KEYS = ['left', 'top', 'right', 'bottom'];
-function defaultSession() {
-    return {
-        lock: {mode: 'off', effect: 'dxlight-dynamix'},
-        unlock: {mode: 'sync', effect: 'dxlight-dynamix'},
-    };
-}
+const SESSION_EFFECTS = [
+    ['dxlight-dynamix', 'Dynamix'], ['dxlight-serpentin', 'Serpentin'], ['dxlight-feu', 'Feu'],
+    ['dxlight-4', 'Météore'], ['dxlight-5', 'Scintillement'], ['dxlight-6', 'Dégradé'], ['dxlight-7', 'Défilement'],
+    ...Array.from({length: 7}, (_value, index) => [`dxlight-rhythm-${index}`, `Rythme ${index + 1}`]),
+];
 
-function discoverDevices() {
-    const directory = Gio.File.new_for_path('/dev/input/by-path');
-    const devices = [];
-    try {
-        const entries = directory.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-        let entry;
-        while ((entry = entries.next_file(null)) !== null) {
-            const name = entry.get_name();
-            if (name.endsWith('-hidraw'))
-                devices.push(GLib.build_filenamev(['/dev/input/by-path', name]));
+function request(method, path, body, callback) {
+    const args = ['curl', '--fail', '--silent', '--show-error', '--request', method, `${API_URL}${path}`];
+    if (body !== null)
+        args.push('--header', 'Content-Type: application/json', '--data', JSON.stringify(body));
+
+    const process = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+    process.communicate_utf8_async(null, null, (source, result) => {
+        try {
+            const [, output] = source.communicate_utf8_finish(result);
+            callback(null, JSON.parse(output));
+        } catch (error) {
+            callback(error, null);
         }
-        entries.close(null);
-    } catch (error) {
-        console.warn(`ROBOBLOQ LED cannot discover HID devices: ${error.message}`);
-    }
-    return devices.sort();
-}
-
-function defaultLayout(devices) {
-    return {
-        version: 2,
-        session: defaultSession(),
-        displays: devices.map((device, index) => ({
-            device,
-            screen: index === 0 ? 'left' : 'right',
-            location: 'back',
-            installation_direction: index === 0 ? 'left-to-right' : 'right-to-left',
-            sync_area: 'edge',
-            edge_count: 3,
-            zones: {left: 17, top: 29, right: 17, bottom: 0},
-        })),
-    };
-}
-
-function loadLayout(devices) {
-    try {
-        const [success, contents] = Gio.File.new_for_path(LAYOUT_PATH).load_contents(null);
-        if (!success)
-            throw new Error('could not read file');
-        const layout = JSON.parse(new TextDecoder().decode(contents));
-        if (!layout || !Array.isArray(layout.displays))
-            throw new Error('invalid layout');
-        if (!layout.session || !layout.session.lock || !layout.session.unlock)
-            layout.session = defaultSession();
-        return layout;
-    } catch (error) {
-        if (!error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
-            console.warn(`ROBOBLOQ LED cannot load ${LAYOUT_PATH}: ${error.message}`);
-        return defaultLayout(devices);
-    }
-}
-
-function saveLayout(layout) {
-    const directory = Gio.File.new_for_path(GLib.path_get_dirname(LAYOUT_PATH));
-    if (!directory.query_exists(null))
-        directory.make_directory_with_parents(null);
-    const contents = new TextEncoder().encode(`${JSON.stringify(layout, null, 2)}\n`);
-    Gio.File.new_for_path(LAYOUT_PATH).replace_contents(
-        contents, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
-    );
-}
-
-function sendLedCount(device, count, callback) {
-    const report = new Uint8Array(64);
-    report.set([0x52, 0x42, 0x07, 0x0e, 0x95, count]);
-    report[6] = report.slice(0, 6).reduce((sum, value) => (sum + value) & 0xff, 0);
-    let stream;
-    try {
-        stream = Gio.File.new_for_path(device).append_to(Gio.FileCreateFlags.NONE, null);
-        stream.write_all_async(report, GLib.PRIORITY_DEFAULT, null, (source, result) => {
-            try {
-                source.write_all_finish(result);
-                callback(null);
-            } catch (error) {
-                callback(error);
-            } finally {
-                source.close_async(GLib.PRIORITY_DEFAULT, null, (_stream, closeResult) => {
-                    try {
-                        _stream.close_finish(closeResult);
-                    } catch (error) {
-                        console.warn(`ROBOBLOQ LED closing ${device} failed: ${error.message}`);
-                    }
-                });
-            }
-        });
-    } catch (error) {
-        callback(error);
-    }
+    });
 }
 
 function deviceLabel(path) {
@@ -144,10 +69,22 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         page.add(loading);
         window.add(page);
 
-        const devices = discoverDevices();
-        const layout = loadLayout(devices);
-        page.remove(loading);
-        this._build(page, devices, layout);
+        request('GET', '/api/devices', null, (deviceError, deviceResponse) => {
+            if (deviceError) {
+                loading.remove(loading.get_first_child());
+                loading.add(new Adw.ActionRow({title: 'Service LED indisponible', subtitle: 'Démarre robobloq-led.service puis rouvre cette fenêtre.'}));
+                return;
+            }
+            request('GET', '/api/layout', null, (layoutError, layoutResponse) => {
+                if (layoutError) {
+                    loading.remove(loading.get_first_child());
+                    loading.add(new Adw.ActionRow({title: 'Configuration indisponible'}));
+                    return;
+                }
+                page.remove(loading);
+                this._build(page, deviceResponse.devices, layoutResponse.layout);
+            });
+        });
     }
 
     _build(page, devices, layout) {
@@ -164,6 +101,8 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         const widgets = [];
         for (const [index, display] of layout.displays.entries())
             widgets.push(this._addDisplay(page, index, display, devices));
+        const session = this._addSession(page, layout.session);
+
         const actions = new Adw.PreferencesGroup();
         const saveRow = new Adw.ActionRow({title: 'Appliquer la configuration'});
         const saveButton = new Gtk.Button({label: 'Enregistrer', valign: Gtk.Align.CENTER});
@@ -184,48 +123,41 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
                 edge_count: display.edgeCount.selected + 3,
                 zones: Object.fromEntries(EDGE_KEYS.map(key => [key, key === 'bottom' && display.edgeCount.selected === 0 ? 0 : display.zones[key].get_value_as_int()])),
             }));
-            const savedLayout = {version: 2, displays, session: layout.session};
-            try {
-                if (!displays.length)
-                    throw new Error('No controller is selected.');
-                if (new Set(displays.map(display => display.device)).size !== displays.length)
-                    throw new Error('Each display must use a different controller.');
-                for (const display of displays) {
-                    const count = Object.values(display.zones).reduce((total, value) => total + value, 0);
-                    if (!display.device || count < 1 || count > 254)
-                        throw new Error('Each strip must contain between 1 and 254 LEDs.');
-                }
-                saveLayout(savedLayout);
-            } catch (error) {
-                result.title = 'Enregistrement impossible';
-                result.subtitle = error.message;
-                return;
-            }
             saveButton.sensitive = false;
             result.title = 'Enregistrement et application...';
-            let remaining = displays.length;
-            let failed = false;
-            for (const display of displays) {
-                const count = Object.values(display.zones).reduce((total, value) => total + value, 0);
-                sendLedCount(display.device, count, error => {
-                    if (failed)
-                        return;
-                    if (error) {
-                        failed = true;
-                        saveButton.sensitive = true;
-                        result.title = 'Enregistrement impossible';
-                        result.subtitle = error.message;
-                        return;
-                    }
-                    remaining--;
-                    if (remaining !== 0)
-                        return;
-                    saveButton.sensitive = true;
-                    result.title = 'Configuration appliquée';
-                    result.subtitle = 'Le total de chaque zone a été envoyé à son contrôleur.';
-                });
-            }
+            request('PUT', '/api/layout', {version: 2, displays, session: this._sessionPayload(session)}, (error) => {
+                saveButton.sensitive = true;
+                result.title = error ? 'Enregistrement impossible' : 'Configuration appliquée';
+                result.subtitle = error ? error.message : 'Le total de chaque zone a été envoyé à son contrôleur.';
+            });
         });
+    }
+
+    _addSession(page, session) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Session GNOME',
+            description: 'Le verrouillage coupe la synchronisation avant de changer les LEDs. Le démarrage automatique du service est conservé.',
+        });
+        page.add(group);
+        const addAction = (title, action) => {
+            const mode = dropdown(['Éteindre les LEDs', 'Synchronisation fond', 'Effet DX-Light'], ['off', 'sync', 'effect'].indexOf(action.mode));
+            addRow(group, title, null, mode);
+            const effect = dropdown(SESSION_EFFECTS.map(([, label]) => label), SESSION_EFFECTS.findIndex(([id]) => id === action.effect));
+            addRow(group, `${title} : effet`, 'Utilisé uniquement avec « Effet DX-Light ».', effect);
+            const updateEffect = () => effect.sensitive = mode.selected === 2;
+            mode.connect('notify::selected', updateEffect);
+            updateEffect();
+            return {mode, effect};
+        };
+        return {lock: addAction('Au verrouillage', session.lock), unlock: addAction('Au déverrouillage', session.unlock)};
+    }
+
+    _sessionPayload(session) {
+        const action = widgets => ({
+            mode: ['off', 'sync', 'effect'][widgets.mode.selected],
+            effect: SESSION_EFFECTS[widgets.effect.selected][0],
+        });
+        return {lock: action(session.lock), unlock: action(session.unlock)};
     }
 
     _addDisplay(page, index, display, devices) {
