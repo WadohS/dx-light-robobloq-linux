@@ -7,10 +7,11 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const API_URL = 'http://127.0.0.1:8000';
-const WALLPAPER_SYNC_SERVICE = 'robobloq-wallpaper-sync.service';
+const BUS_NAME = 'io.github.wadohs.RobobloqLed';
+const OBJECT_PATH = '/io/github/wadohs/RobobloqLed';
+const INTERFACE_NAME = BUS_NAME;
 const EN = {
-    'Synchroniser le fond d\'ecran': 'Synchronize wallpaper', 'Effets': 'Effects',
+    'Synchronisation écran': 'Screen synchronization', 'Effets': 'Effects',
     'Rythme contrôleur': 'Controller rhythm', 'Blanc chaud': 'Warm white',
     'Bleu doux': 'Soft blue', 'Eteindre': 'Turn off', 'Préférences': 'Preferences',
     'Vitesse': 'Speed', 'Serpentin': 'Snake', 'Feu': 'Fire', 'Meteore': 'Meteor',
@@ -20,13 +21,13 @@ const EN = {
 };
 const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const DYNAMIC_EFFECTS = [
-    ['Dynamix', 'dxlight-dynamix', 'weather-clear-symbolic'],
-    ['Serpentin', 'dxlight-serpentin', 'weather-few-clouds-symbolic'],
-    ['Feu', 'dxlight-feu', 'weather-storm-symbolic'],
-    ['Meteore', 'dxlight-4', 'weather-showers-scattered-symbolic'],
-    ['Scintillement', 'dxlight-5', 'starred-symbolic'],
-    ['Dégradé', 'dxlight-6', 'color-select-symbolic'],
-    ['Defilement', 'dxlight-7', 'view-conceal-symbolic'],
+    ['Dynamix', 0, 'weather-clear-symbolic'],
+    ['Serpentin', 1, 'weather-few-clouds-symbolic'],
+    ['Feu', 2, 'weather-storm-symbolic'],
+    ['Meteore', 3, 'weather-showers-scattered-symbolic'],
+    ['Scintillement', 4, 'starred-symbolic'],
+    ['Dégradé', 5, 'color-select-symbolic'],
+    ['Defilement', 6, 'view-conceal-symbolic'],
 ];
 const RHYTHM_EFFECTS = [
     ['Onde', 'weather-few-clouds-symbolic'],
@@ -38,23 +39,25 @@ const RHYTHM_EFFECTS = [
     ['Arc-en-ciel', 'weather-clear-symbolic'],
 ];
 
-function post(path, body = null) {
-    const args = [
-        'curl', '--fail', '--silent', '--show-error', '--request', 'POST',
-        `${API_URL}${path}`,
-    ];
-
-    if (body !== null)
-        args.push('--header', 'Content-Type: application/json', '--data', JSON.stringify(body));
-
-    const process = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-    process.communicate_utf8_async(null, null, (source, result) => {
-        try {
-            source.communicate_utf8_finish(result);
-        } catch (error) {
-            console.warn(`ROBOBLOQ LED request failed: ${error.message}`);
+function callDaemon(method, parameters = new GLib.Variant('()', [])) {
+    Gio.DBus.session.call(
+        BUS_NAME,
+        OBJECT_PATH,
+        INTERFACE_NAME,
+        method,
+        parameters,
+        null,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        null,
+        (source, result) => {
+            try {
+                source.call_finish(result);
+            } catch (error) {
+                console.warn(`ROBOBLOQ LED D-Bus ${method} failed: ${error.message}`);
+            }
         }
-    });
+    );
 }
 
 export default class RobobloqLedExtension extends Extension {
@@ -64,7 +67,7 @@ export default class RobobloqLedExtension extends Extension {
             text: 'LED',
         }));
 
-        this._sync = new PopupMenu.PopupSwitchMenuItem(t('Synchroniser le fond d\'ecran'), false);
+        this._sync = new PopupMenu.PopupSwitchMenuItem(t('Synchronisation écran'), false);
         this._sync.connect('toggled', (_item, enabled) => {
             if (enabled)
                 this._startSync();
@@ -84,7 +87,7 @@ export default class RobobloqLedExtension extends Extension {
 
         const rhythm = new PopupMenu.PopupSubMenuMenuItem(t('Rythme contrôleur'));
         RHYTHM_EFFECTS.forEach(([label, icon], index) =>
-            this._addEffect(rhythm.menu, label, `dxlight-rhythm-${index}`, icon));
+            this._addRhythm(rhythm.menu, label, index, icon));
         this._indicator.menu.addMenuItem(effects);
         this._indicator.menu.addMenuItem(rhythm);
 
@@ -92,7 +95,7 @@ export default class RobobloqLedExtension extends Extension {
         this._addAction(t('Bleu doux'), () => this._setFixedColor(10, 132, 255, 35));
         this._addAction(t('Eteindre'), () => {
             this._sync.setToggleState(false);
-            post('/api/off');
+            callDaemon('Off');
         });
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -104,17 +107,27 @@ export default class RobobloqLedExtension extends Extension {
     _setFixedColor(r, g, b, brightness) {
         this._stopSync();
         this._sync.setToggleState(false);
-        post('/api/color', {r, g, b, brightness});
+        callDaemon('SetColor', new GLib.Variant('(iiii)', [r, g, b, brightness]));
     }
 
-    _addEffect(menu, label, effect, icon = null) {
+    _addEffect(menu, label, effectId, icon = null) {
         const item = icon
             ? new PopupMenu.PopupImageMenuItem(label, icon)
             : new PopupMenu.PopupMenuItem(label);
         item.connect('activate', () => {
             this._sync.setToggleState(false);
             this._stopSync();
-            post('/api/effect/start', {effect});
+            callDaemon('StartHardwareEffect', new GLib.Variant('(i)', [effectId]));
+        });
+        menu.addMenuItem(item);
+    }
+
+    _addRhythm(menu, label, effectId, icon) {
+        const item = new PopupMenu.PopupImageMenuItem(label, icon);
+        item.connect('activate', () => {
+            this._sync.setToggleState(false);
+            this._stopSync();
+            callDaemon('StartRhythm', new GLib.Variant('(i)', [effectId]));
         });
         menu.addMenuItem(item);
     }
@@ -131,7 +144,7 @@ export default class RobobloqLedExtension extends Extension {
                 return;
             this._dxlightSpeed = speed;
             this._speedValue.text = `${speed}%`;
-            post('/api/dxlight/speed', {speed});
+            callDaemon('SetSpeed', new GLib.Variant('(i)', [speed]));
         });
         item.add_child(label);
         item.add_child(this._speedSlider);
@@ -140,27 +153,11 @@ export default class RobobloqLedExtension extends Extension {
     }
 
     _startSync() {
-        post('/api/effect/stop');
-        this._setWallpaperSync(true);
+        callDaemon('StartScreenSync', new GLib.Variant('(iiiidi)', [2, 60, 80, 4, 0.35, 6]));
     }
 
     _stopSync() {
-        this._setWallpaperSync(false);
-    }
-
-    _setWallpaperSync(enabled) {
-        const action = enabled ? 'start' : 'stop';
-        const process = Gio.Subprocess.new(
-            ['systemctl', '--user', action, WALLPAPER_SYNC_SERVICE],
-            Gio.SubprocessFlags.STDERR_PIPE
-        );
-        process.wait_async(null, (source, result) => {
-            try {
-                source.wait_finish(result);
-            } catch (error) {
-                console.warn(`ROBOBLOQ wallpaper sync failed: ${error.message}`);
-            }
-        });
+        callDaemon('StopScreenSync');
     }
 
     _addAction(label, callback) {

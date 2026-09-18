@@ -1,11 +1,11 @@
 [Unit]
-Description=DX-Light local LED controller
+Description=DX-Light local D-Bus LED controller
 After=graphical-session.target
 
 [Service]
 Type=simple
 Environment=XDG_RUNTIME_DIR=%t
-ExecStart=%h/.local/share/dx-light-robobloq-linux/venv/bin/python -m uvicorn robobloq_led.webapp:app --host 127.0.0.1 --port 8000
+ExecStart=%h/.local/share/dx-light-robobloq-linux/venv/bin/python -m robobloq_led.daemon
 Restart=on-failure
 RestartSec=3
 

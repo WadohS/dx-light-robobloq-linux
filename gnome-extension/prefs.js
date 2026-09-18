@@ -4,15 +4,14 @@ import Gtk from 'gi://Gtk';
 import GLib from 'gi://GLib';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const API_URL = 'http://127.0.0.1:8000';
 const EN = {
     'DX-Light Configuration': 'DX-Light Configuration', 'Chargement des contrôleurs...': 'Loading controllers...',
     'Service LED indisponible': 'LED service unavailable', 'Démarre robobloq-led.service puis rouvre cette fenêtre.': 'Start robobloq-led.service, then reopen this window.',
     'Configuration indisponible': 'Configuration unavailable', 'Un bandeau par écran. Répartis les LEDs sur trois ou quatre côtés selon la pose réelle.': 'One strip per display. Distribute LEDs over three or four sides according to the physical installation.',
-    'Les réglages sont enregistrés localement et appliqués aux contrôleurs sélectionnés.': 'Settings are saved locally and applied to the selected controllers.',
+    'Les réglages sont enregistrés localement et lus au prochain démarrage du service.': 'Settings are saved locally and read when the service next starts.',
     'Appliquer la configuration': 'Apply configuration', 'Enregistrer': 'Save', 'Modifications non enregistrées': 'Unsaved changes',
-    'Enregistrement et application...': 'Saving and applying...', 'Enregistrement impossible': 'Unable to save', 'Configuration appliquée': 'Configuration applied',
-    'Le total de chaque zone a été envoyé à son contrôleur.': 'Each zone total was sent to its controller.',
+    'Enregistrement...': 'Saving...', 'Enregistrement impossible': 'Unable to save', 'Configuration enregistrée': 'Configuration saved',
+    'Les réglages seront lus au prochain redémarrage du service.': 'Settings will be read when the service next restarts.',
     'Session GNOME': 'GNOME session', 'Éteindre les LEDs': 'Turn off LEDs', 'Synchronisation fond': 'Wallpaper synchronization', 'Effet DX-Light': 'DX-Light effect',
     'Au verrouillage': 'On lock', 'Au déverrouillage': 'On unlock', 'Contrôleur': 'Controller', 'Écran': 'Display', 'Écran gauche': 'Left display', 'Écran droit': 'Right display',
     'Derrière l’écran': 'Behind display', 'Au-dessus de l’écran': 'Above display', 'Sous l’écran': 'Below display', 'À gauche de l’écran': 'Left of display', 'À droite de l’écran': 'Right of display',
@@ -27,18 +26,96 @@ const SESSION_EFFECTS = [
     ...Array.from({length: 7}, (_value, index) => [`dxlight-rhythm-${index}`, `Rythme ${index + 1}`]),
 ];
 
-function request(method, path, body, callback) {
-    const args = ['curl', '--fail', '--silent', '--show-error', '--request', method, `${API_URL}${path}`];
-    if (body !== null)
-        args.push('--header', 'Content-Type: application/json', '--data', JSON.stringify(body));
+const LAYOUT_PATH = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'robobloq-led', 'layout.json']);
 
-    const process = Gio.Subprocess.new(args, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-    process.communicate_utf8_async(null, null, (source, result) => {
+function defaultSession() {
+    return {
+        lock: {mode: 'off', effect: 'dxlight-dynamix'},
+        unlock: {mode: 'sync', effect: 'dxlight-dynamix'},
+    };
+}
+
+function isVendorDevice(path) {
+    const sysname = GLib.path_get_basename(path);
+    if (!/^hidraw\d+$/.test(sysname))
+        return false;
+    try {
+        const [, descriptor] = Gio.File.new_for_path(`/sys/class/hidraw/${sysname}/device/report_descriptor`).load_contents(null);
+        return descriptor[0] === 0x06 && descriptor[1] === 0x00 && descriptor[2] === 0xff;
+    } catch (_error) {
+        return false;
+    }
+}
+
+function discoverDevices() {
+    const directoryPath = '/dev/input/by-path';
+    const devices = [];
+    try {
+        const directory = GLib.dir_open(directoryPath, 0);
+        let name;
+        while ((name = directory.read_name()) !== null) {
+            if (!name.endsWith('-hidraw'))
+                continue;
+            const link = GLib.build_filenamev([directoryPath, name]);
+            if (!GLib.file_test(link, GLib.FileTest.IS_SYMLINK))
+                continue;
+            const target = GLib.canonicalize_filename(GLib.file_read_link(link), directoryPath);
+            if (!/^\/dev\/hidraw\d+$/.test(target) || !GLib.file_test(target, GLib.FileTest.EXISTS) || !isVendorDevice(target))
+                continue;
+            devices.push(link);
+        }
+        directory.close();
+    } catch (_error) {
+        // An absent by-path directory simply means no stable controller links are available.
+    }
+    return devices.sort();
+}
+
+function defaultLayout(devices) {
+    return {
+        version: 2,
+        session: defaultSession(),
+        displays: devices.map((device, index) => ({
+            device,
+            screen: index === 0 ? 'left' : 'right',
+            location: 'back',
+            installation_direction: index === 0 ? 'left-to-right' : 'right-to-left',
+            sync_area: 'edge',
+            edge_count: 3,
+            zones: {left: 17, top: 29, right: 17, bottom: 0},
+        })),
+    };
+}
+
+function loadLayout(devices, callback) {
+    const layoutFile = Gio.File.new_for_path(LAYOUT_PATH);
+    layoutFile.load_contents_async(null, (source, result) => {
         try {
-            const [, output] = source.communicate_utf8_finish(result);
-            callback(null, JSON.parse(output));
+            const [, contents] = source.load_contents_finish(result);
+            const layout = JSON.parse(new TextDecoder().decode(contents));
+            if (!layout || !Array.isArray(layout.displays))
+                throw new Error('Invalid layout');
+            const defaults = defaultSession();
+            layout.session = layout.session && typeof layout.session === 'object' ? layout.session : {};
+            layout.session.lock = layout.session.lock && typeof layout.session.lock === 'object' ? layout.session.lock : defaults.lock;
+            layout.session.unlock = layout.session.unlock && typeof layout.session.unlock === 'object' ? layout.session.unlock : defaults.unlock;
+            callback(null, layout);
+        } catch (_error) {
+            callback(null, defaultLayout(devices));
+        }
+    });
+}
+
+function saveLayout(layout, callback) {
+    const layoutFile = Gio.File.new_for_path(LAYOUT_PATH);
+    GLib.mkdir_with_parents(GLib.path_get_dirname(LAYOUT_PATH), 0o700);
+    const contents = new TextEncoder().encode(`${JSON.stringify(layout, null, 2)}\n`);
+    layoutFile.replace_contents_async(contents, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null, (source, result) => {
+        try {
+            source.replace_contents_finish(result);
+            callback(null);
         } catch (error) {
-            callback(error, null);
+            callback(error);
         }
     });
 }
@@ -69,21 +146,10 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         page.add(loading);
         window.add(page);
 
-        request('GET', '/api/devices', null, (deviceError, deviceResponse) => {
-            if (deviceError) {
-                loading.remove(loading.get_first_child());
-                loading.add(new Adw.ActionRow({title: 'Service LED indisponible', subtitle: 'Démarre robobloq-led.service puis rouvre cette fenêtre.'}));
-                return;
-            }
-            request('GET', '/api/layout', null, (layoutError, layoutResponse) => {
-                if (layoutError) {
-                    loading.remove(loading.get_first_child());
-                    loading.add(new Adw.ActionRow({title: 'Configuration indisponible'}));
-                    return;
-                }
-                page.remove(loading);
-                this._build(page, deviceResponse.devices, layoutResponse.layout);
-            });
+        const devices = discoverDevices();
+        loadLayout(devices, (_error, layout) => {
+            page.remove(loading);
+            this._build(page, devices, layout);
         });
     }
 
@@ -94,7 +160,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         });
         intro.add(new Adw.ActionRow({
             title: `${devices.length} contrôleur(s) détecté(s)`,
-            subtitle: 'Les réglages sont enregistrés localement et appliqués aux contrôleurs sélectionnés.',
+            subtitle: 'Les réglages sont enregistrés localement et lus au prochain démarrage du service.',
         }));
         page.add(intro);
 
@@ -124,11 +190,11 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
                 zones: Object.fromEntries(EDGE_KEYS.map(key => [key, key === 'bottom' && display.edgeCount.selected === 0 ? 0 : display.zones[key].get_value_as_int()])),
             }));
             saveButton.sensitive = false;
-            result.title = 'Enregistrement et application...';
-            request('PUT', '/api/layout', {version: 2, displays, session: this._sessionPayload(session)}, (error) => {
+            result.title = 'Enregistrement...';
+            saveLayout({version: 2, displays, session: this._sessionPayload(session)}, error => {
                 saveButton.sensitive = true;
-                result.title = error ? 'Enregistrement impossible' : 'Configuration appliquée';
-                result.subtitle = error ? error.message : 'Le total de chaque zone a été envoyé à son contrôleur.';
+                result.title = error ? 'Enregistrement impossible' : 'Configuration enregistrée';
+                result.subtitle = error ? error.message : 'Les réglages seront lus au prochain redémarrage du service.';
             });
         });
     }

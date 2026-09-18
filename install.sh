@@ -12,7 +12,7 @@ command -v python3 >/dev/null || { printf 'python3 is required.\n' >&2; exit 1; 
 command -v gnome-extensions >/dev/null || { printf 'GNOME Shell extensions are required.\n' >&2; exit 1; }
 command -v curl >/dev/null || { printf 'curl is required.\n' >&2; exit 1; }
 
-python3 -m venv "$VENV_DIR"
+python3 -m venv --system-site-packages "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip
 "$VENV_DIR/bin/pip" install "$ROOT_DIR"
 
@@ -28,6 +28,6 @@ gnome-extensions enable "$EXTENSION_UUID" || true
 systemctl --user daemon-reload
 systemctl --user enable --now robobloq-led.service robobloq-session-monitor.service
 
-printf 'DX-Light installed. Reconnect to GNOME before opening the panel extension.\n'
-printf 'Optional wallpaper sync: systemctl --user enable --now robobloq-wallpaper-sync.service\n'
+printf 'DX-Light installed. The local D-Bus daemon owns HID and screen synchronization; no HTTP port is opened.\n'
+printf 'Reconnect to GNOME before opening the panel extension.\n'
 printf 'Optional HID permissions: sudo install -m 0644 99-dx-light.rules /etc/udev/rules.d/\n'

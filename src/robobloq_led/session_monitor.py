@@ -1,21 +1,31 @@
-import json
 import subprocess
-import urllib.request
 
 from .device import SESSION_LOCK_PATH, load_layout
 
 
-API_URL = "http://127.0.0.1:8000"
+BUS_NAME = "io.github.wadohs.RobobloqLed"
+OBJECT_PATH = "/io/github/wadohs/RobobloqLed"
 WALLPAPER_SYNC_SERVICE = "robobloq-wallpaper-sync.service"
+HARDWARE_EFFECTS = {
+    "dxlight-dynamix": 0,
+    "dxlight-serpentin": 1,
+    "dxlight-feu": 2,
+    "dxlight-4": 3,
+    "dxlight-5": 4,
+    "dxlight-6": 5,
+    "dxlight-7": 6,
+}
 
 
-def post(path: str, payload: dict | None = None) -> None:
-    body = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(f"{API_URL}{path}", data=body, method="POST")
-    if body is not None:
-        request.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(request, timeout=3):
-        pass
+def daemon_call(method: str, *arguments: int) -> None:
+    subprocess.run(
+        [
+            "gdbus", "call", "--session", "--dest", BUS_NAME,
+            "--object-path", OBJECT_PATH, "--method", f"{BUS_NAME}.{method}",
+            *(str(argument) for argument in arguments),
+        ],
+        check=True,
+    )
 
 
 def set_wallpaper_sync(enabled: bool) -> None:
@@ -33,13 +43,22 @@ def apply_action(action: dict) -> None:
     mode = action.get("mode", "off")
     if mode == "off":
         set_wallpaper_sync(False)
-        post("/api/off")
+        daemon_call("Off")
     elif mode == "sync":
-        post("/api/effect/stop")
+        daemon_call("Stop")
         set_wallpaper_sync(True)
     elif mode == "effect":
         set_wallpaper_sync(False)
-        post("/api/effect/start", {"effect": action.get("effect", "dxlight-dynamix")})
+        effect = action.get("effect", "dxlight-dynamix")
+        if effect in HARDWARE_EFFECTS:
+            daemon_call("StartHardwareEffect", HARDWARE_EFFECTS[effect])
+        elif isinstance(effect, str) and effect.startswith("dxlight-rhythm-"):
+            try:
+                rhythm_id = int(effect.removeprefix("dxlight-rhythm-"))
+            except ValueError:
+                rhythm_id = -1
+            if 0 <= rhythm_id <= 6:
+                daemon_call("StartRhythm", rhythm_id)
 
 
 def is_locked() -> bool:
