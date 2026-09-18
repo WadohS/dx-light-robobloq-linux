@@ -7,7 +7,6 @@ per-controller protocol counters cannot be interleaved by multiple clients.
 from __future__ import annotations
 
 import threading
-import time
 import traceback
 
 from gi.repository import Gio, GLib
@@ -28,20 +27,14 @@ INTROSPECTION_XML = f"""
       <arg name="b" type="i" direction="in"/>
       <arg name="brightness" type="i" direction="in"/>
     </method>
+    <method name="SetScreenColors">
+      <arg name="colors" type="a(iii)" direction="in"/>
+    </method>
     <method name="Off"/>
     <method name="StartHardwareEffect"><arg name="effectId" type="i" direction="in"/></method>
     <method name="StartRhythm"><arg name="effectId" type="i" direction="in"/></method>
     <method name="SetSpeed"><arg name="speed" type="i" direction="in"/></method>
     <method name="Stop"/>
-    <method name="StartScreenSync">
-      <arg name="monitor" type="i" direction="in"/>
-      <arg name="fps" type="i" direction="in"/>
-      <arg name="thickness" type="i" direction="in"/>
-      <arg name="downscale" type="i" direction="in"/>
-      <arg name="alpha" type="d" direction="in"/>
-      <arg name="threshold" type="i" direction="in"/>
-    </method>
-    <method name="StopScreenSync"/>
   </interface>
 </node>
 """
@@ -55,23 +48,12 @@ class RobobloqDaemon:
     def __init__(self) -> None:
         self._controller: RobobloqControllers | None = None
         self._hid_lock = threading.RLock()
-        self._sync_stop = threading.Event()
-        self._sync_thread: threading.Thread | None = None
+        self._last_screen_colors: list[tuple[int, int, int]] | None = None
 
     def _get_controller(self) -> RobobloqControllers:
         if self._controller is None:
             self._controller = RobobloqControllers()
         return self._controller
-
-    def _stop_sync(self) -> None:
-        self._sync_stop.set()
-        thread = self._sync_thread
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=2)
-            if thread.is_alive():
-                raise RuntimeError("Screen sync did not stop within two seconds.")
-        self._sync_thread = None
-        self._sync_stop.clear()
 
     def _stop_hardware_effect(self) -> None:
         # Send this unconditionally: effects persist in the controller after a restart.
@@ -80,7 +62,6 @@ class RobobloqDaemon:
                 self._controller.stop_dxlight_effect()
 
     def set_color(self, r: int, g: int, b: int, brightness: int) -> None:
-        self._stop_sync()
         self._stop_hardware_effect()
         scale = _clamp(brightness, 0, 100) / 100.0
         rgb = tuple(int(_clamp(channel, 0, 255) * scale) for channel in (r, g, b))
@@ -91,12 +72,10 @@ class RobobloqDaemon:
         self.set_color(0, 0, 0, 100)
 
     def start_hardware_effect(self, effect_id: int) -> None:
-        self._stop_sync()
         with self._hid_lock:
             self._get_controller().set_dxlight_effect(int(effect_id))
 
     def start_rhythm(self, effect_id: int) -> None:
-        self._stop_sync()
         with self._hid_lock:
             self._get_controller().set_dxlight_rhythm(int(effect_id))
 
@@ -105,87 +84,35 @@ class RobobloqDaemon:
             self._get_controller().set_dxlight_speed(_clamp(speed, 0, 100))
 
     def stop(self) -> None:
-        self._stop_sync()
         self._stop_hardware_effect()
 
-    def start_screen_sync(
-        self, monitor: int, fps: int, thickness: int, downscale: int, alpha: float, threshold: int
-    ) -> None:
-        try:
-            import mss
-            import numpy
-        except ImportError as error:
-            raise RuntimeError("Screen sync requires the mss and numpy packages.") from error
-        self._stop_sync()
-        monitor = int(monitor)
-        with mss.mss() as capture:
-            controller_count = len(self._get_controller().controllers)
-            if monitor < 1 or monitor + controller_count > len(capture.monitors):
-                raise ValueError(
-                    f"Need {controller_count} monitors from index {monitor}. "
-                    f"Available: 1..{len(capture.monitors) - 1}"
-                )
-        config = (monitor, _clamp(fps, 1, 120), _clamp(thickness, 1, 400),
-                  _clamp(downscale, 1, 16), max(0.0, min(1.0, float(alpha))),
-                  _clamp(threshold, 0, 255 * 3))
-        # Each controller follows its matching monitor, starting at the selected index.
+    def set_screen_colors(self, colors: list[tuple[int, int, int]]) -> None:
+        if SESSION_LOCK_PATH.exists():
+            return
+        normalized = [tuple(_clamp(channel, 0, 255) for channel in rgb) for rgb in colors]
         with self._hid_lock:
-            for controller in self._get_controller().controllers:
-                controller.stop_dxlight_effect()
-        self._sync_stop.clear()
-        self._sync_thread = threading.Thread(
-            target=self._screen_sync_loop, args=config, name="robobloq-screen-sync", daemon=True
-        )
-        self._sync_thread.start()
-
-    def _screen_sync_loop(
-        self, monitor: int, fps: int, thickness: int, downscale: int, alpha: float, threshold: int
-    ) -> None:
-        import mss
-        import numpy as np
-
-        with self._hid_lock:
-            controllers = list(self._get_controller().controllers)
-        smooth = [np.zeros(3, dtype=np.float32) for _controller in controllers]
-        last_rgb = [(-1, -1, -1) for _controller in controllers]
-        interval = 1.0 / fps
-        try:
-            with mss.mss() as capture:
-                while not self._sync_stop.is_set():
-                    started = time.monotonic()
-                    if not SESSION_LOCK_PATH.exists():
-                        for index, controller in enumerate(controllers):
-                            frame = np.array(capture.grab(capture.monitors[monitor + index]))[:, :, :3][:, :, ::-1]
-                            image = frame[::downscale, ::downscale, :]
-                            height, width, _ = image.shape
-                            edge = max(1, min(thickness, width // 4, height // 4))
-                            target = (0.25 * image[:, :edge].mean(axis=(0, 1))
-                                      + 0.50 * image[:edge, :].mean(axis=(0, 1))
-                                      + 0.25 * image[:, width - edge:].mean(axis=(0, 1)))
-                            smooth[index] = (1.0 - alpha) * smooth[index] + alpha * target
-                            rgb = tuple(np.clip(smooth[index], 0, 255).astype(int))
-                            if sum(abs(a - b) for a, b in zip(rgb, last_rgb[index])) > threshold:
-                                with self._hid_lock:
-                                    if not self._sync_stop.is_set():
-                                        controller.set_color(*rgb)
-                                        last_rgb[index] = rgb
-                    self._sync_stop.wait(max(0.0, interval - (time.monotonic() - started)))
-        finally:
-            # Do not clear the shared stop event: a replacement sync may already use it.
-            pass
+            controllers = self._get_controller().controllers
+            if len(normalized) != len(controllers):
+                raise ValueError(f"Need {len(controllers)} screen colors; received {len(normalized)}.")
+            for controller, rgb in zip(controllers, normalized):
+                if len(rgb) != 3:
+                    raise ValueError("Each screen color must contain red, green, and blue.")
+                controller.set_color(*rgb)
+        if normalized != self._last_screen_colors:
+            print(f"DX-Light Shell colors={normalized}", flush=True)
+            self._last_screen_colors = normalized
 
     def handle_method_call(self, _connection, _sender, _path, _interface, method, parameters, invocation) -> None:
         try:
             args = parameters.unpack()
             handlers = {
                 "SetColor": lambda: self.set_color(*args),
+                "SetScreenColors": lambda: self.set_screen_colors(*args),
                 "Off": self.off,
                 "StartHardwareEffect": lambda: self.start_hardware_effect(*args),
                 "StartRhythm": lambda: self.start_rhythm(*args),
                 "SetSpeed": lambda: self.set_speed(*args),
                 "Stop": self.stop,
-                "StartScreenSync": lambda: self.start_screen_sync(*args),
-                "StopScreenSync": self._stop_sync,
             }
             if method not in handlers:
                 raise ValueError(f"Unknown method: {method}")

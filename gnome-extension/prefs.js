@@ -17,6 +17,7 @@ const EN = {
     'Derrière l’écran': 'Behind display', 'Au-dessus de l’écran': 'Above display', 'Sous l’écran': 'Below display', 'À gauche de l’écran': 'Left of display', 'À droite de l’écran': 'Right of display',
     'De gauche vers la droite': 'Left to right', 'De droite vers la gauche': 'Right to left', 'Bord de l’écran': 'Display edge', 'Centre de l’écran': 'Display center',
     '3 côtés': '3 sides', '4 côtés': '4 sides', 'LEDs à gauche': 'Left LEDs', 'LEDs en haut': 'Top LEDs', 'LEDs à droite': 'Right LEDs', 'LEDs en bas': 'Bottom LEDs',
+    'Planification solaire': 'Solar schedule', 'Activer la synchronisation du coucher au lever': 'Enable synchronization from sunset to sunrise', 'Latitude': 'Latitude', 'Longitude': 'Longitude',
 };
 const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const EDGE_KEYS = ['left', 'top', 'right', 'bottom'];
@@ -75,6 +76,7 @@ function defaultLayout(devices) {
     return {
         version: 2,
         session: defaultSession(),
+        schedule: {enabled: true, latitude: 48.8566, longitude: 2.3522},
         displays: devices.map((device, index) => ({
             device,
             screen: index === 0 ? 'left' : 'right',
@@ -99,6 +101,7 @@ function loadLayout(devices, callback) {
             layout.session = layout.session && typeof layout.session === 'object' ? layout.session : {};
             layout.session.lock = layout.session.lock && typeof layout.session.lock === 'object' ? layout.session.lock : defaults.lock;
             layout.session.unlock = layout.session.unlock && typeof layout.session.unlock === 'object' ? layout.session.unlock : defaults.unlock;
+            layout.schedule = layout.schedule && typeof layout.schedule === 'object' ? layout.schedule : {enabled: true, latitude: 48.8566, longitude: 2.3522};
             callback(null, layout);
         } catch (_error) {
             callback(null, defaultLayout(devices));
@@ -168,6 +171,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         for (const [index, display] of layout.displays.entries())
             widgets.push(this._addDisplay(page, index, display, devices));
         const session = this._addSession(page, layout.session);
+        const schedule = this._addSchedule(page, layout.schedule);
 
         const actions = new Adw.PreferencesGroup();
         const saveRow = new Adw.ActionRow({title: 'Appliquer la configuration'});
@@ -191,7 +195,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
             }));
             saveButton.sensitive = false;
             result.title = 'Enregistrement...';
-            saveLayout({version: 2, displays, session: this._sessionPayload(session)}, error => {
+            saveLayout({version: 2, displays, session: this._sessionPayload(session), schedule: this._schedulePayload(schedule)}, error => {
                 saveButton.sensitive = true;
                 result.title = error ? 'Enregistrement impossible' : 'Configuration enregistrée';
                 result.subtitle = error ? error.message : 'Les réglages seront lus au prochain redémarrage du service.';
@@ -224,6 +228,33 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
             effect: SESSION_EFFECTS[widgets.effect.selected][0],
         });
         return {lock: action(session.lock), unlock: action(session.unlock)};
+    }
+
+    _addSchedule(page, schedule) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Planification solaire',
+            description: 'La synchronisation s’active au coucher et s’arrête au lever du soleil. Les actions manuelles restent prioritaires jusqu’au prochain événement solaire.',
+        });
+        page.add(group);
+        const enabled = new Gtk.Switch({active: schedule.enabled === true, valign: Gtk.Align.CENTER});
+        addRow(group, 'Activer la synchronisation du coucher au lever', null, enabled);
+        const latitude = Gtk.SpinButton.new_with_range(-90, 90, 0.0001);
+        latitude.set_digits(4);
+        latitude.set_value(Number.isFinite(schedule.latitude) ? schedule.latitude : 48.8566);
+        addRow(group, 'Latitude', 'Paris : 48.8566', latitude);
+        const longitude = Gtk.SpinButton.new_with_range(-180, 180, 0.0001);
+        longitude.set_digits(4);
+        longitude.set_value(Number.isFinite(schedule.longitude) ? schedule.longitude : 2.3522);
+        addRow(group, 'Longitude', 'Paris : 2.3522', longitude);
+        return {enabled, latitude, longitude};
+    }
+
+    _schedulePayload(schedule) {
+        return {
+            enabled: schedule.enabled.active,
+            latitude: schedule.latitude.get_value(),
+            longitude: schedule.longitude.get_value(),
+        };
     }
 
     _addDisplay(page, index, display, devices) {

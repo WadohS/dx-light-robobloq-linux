@@ -1,7 +1,6 @@
 # DX-Light ROBOBLOQ Linux
 
-Control a ROBOBLOQ / QinHeng USB HID ambient LED strip (VID:PID **1a86:fe07**) on Linux (Ubuntu).  
-Includes a simple **web UI** (color picker) and a small **CLI**.
+Control a ROBOBLOQ / QinHeng USB HID ambient LED strip (VID:PID **1a86:fe07**) on Linux (Ubuntu).
 
 > This project was built by reverse-engineering the device protocol via USB capture and implementing native Linux HID control.
 > It builds on the original Linux protocol work by Amel Varghese / RlNZLER.
@@ -14,11 +13,10 @@ Includes a simple **web UI** (color picker) and a small **CLI**.
 - Control multiple connected DX-Light controllers
 - Built-in dynamic effects, controller rhythm presets, and effect speed
 - Per-display LED-zone configuration (left, top, right, bottom)
-- Local FastAPI configuration UI at `http://127.0.0.1:8000`
+- Local GNOME Shell panel control through a user-session D-Bus service
 - GNOME Shell extension sources in `gnome-extension/`
 - Wallpaper synchronization and session lock actions
 - Works without the vendor Windows app
-- Web UI (FastAPI + simple HTML color picker)
 - Auto-detects the correct vendor HID interface (`06 00 ff` report descriptor)
 - Udev rule support (run without `sudo`)
 
@@ -26,7 +24,7 @@ Includes a simple **web UI** (color picker) and a small **CLI**.
 
 ## Quick install
 
-Requires GNOME Shell, Python 3 with `venv`, and a connected DX-Light controller.
+Requires GNOME Shell 50, Python 3 with `venv`, and a connected DX-Light controller.
 
 ```bash
 git clone https://github.com/WadohS/dx-light-robobloq-linux.git
@@ -35,8 +33,8 @@ cd dx-light-robobloq-linux
 ```
 
 The installer creates a user-local Python environment, installs the GNOME
-extension, and enables the API plus the lock-session monitor. Log out and back
-in before using the panel extension.
+extension, and enables the D-Bus daemon plus the lock-session monitor. Log out
+and back in before using the panel extension.
 
 Wallpaper synchronization is optional because it expects a composite wallpaper
 at `~/.local/share/dual-wallpaper/wallpaper-composite.jpg`, such as the one
@@ -116,36 +114,6 @@ robobloq-led --dev /dev/hidraw1 --r 255 --g 255 --b 255
 
 ---
 
-## Web UI
-
-### Run locally
-
-```bash
-uvicorn robobloq_led.webapp:app --reload
-```
-
-Open:
-
-- http://127.0.0.1:8000
-
-### Run on LAN (open from phone)
-
-```bash
-uvicorn robobloq_led.webapp:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Find your PC IP:
-
-```bash
-hostname -I
-```
-
-Then open on your phone (same Wi-Fi):
-
-- http://<YOUR_IP>:8000
-
----
-
 ## How it works (high level)
 
 - The LED strip exposes two HID interfaces:
@@ -178,9 +146,13 @@ lsusb | grep -i 1a86
 ## Screen Sync (Ambilight-style)
 
 Supports:
-- External monitor capture (X11)
+- Wallpaper-only synchronization on Wayland, without a screen-sharing session
 - Real-time ambient color sync
 - Adjustable FPS and edge thickness
+
+On GNOME Wayland, the extension samples the configured wallpaper image and
+sends one color per display to the local D-Bus daemon. Windows are excluded;
+no Portal permission, PipeWire stream, or screen-sharing indicator is used.
 
 Example:
 ```

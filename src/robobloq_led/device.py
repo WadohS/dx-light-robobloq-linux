@@ -47,6 +47,7 @@ def _default_layout() -> dict:
     return {
         "version": 2,
         "session": _default_session_behavior(),
+        "schedule": {"enabled": True, "latitude": 48.8566, "longitude": 2.3522},
         "displays": [
             {
                 "device": device,

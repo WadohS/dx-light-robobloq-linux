@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "robobloq-led"
-version = "0.4.1"
+version = "0.5.0"
 description = "Control ROBOBLOQ USBHID ambient LED strips (1a86:fe07) on Linux."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,7 +15,6 @@ dependencies = [
   "mss>=10.1",
   "numpy>=2.2",
   "pillow>=12.1",
-  "pipewire-capture>=0.2.9",
   "pydantic>=2.12",
   "uvicorn>=0.41",
 ]
