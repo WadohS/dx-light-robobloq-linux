@@ -200,7 +200,7 @@ export default class RobobloqLedExtension extends Extension {
             this._startSync();
         else
             this._stopSync();
-        if (this._sync.getToggleState() !== enabled) {
+        if (this._sync.state !== enabled) {
             this._updatingSyncSwitch = true;
             this._sync.setToggleState(enabled);
             this._updatingSyncSwitch = false;
