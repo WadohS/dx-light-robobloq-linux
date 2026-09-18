@@ -97,6 +97,7 @@ export default class RobobloqLedExtension extends Extension {
     enable() {
         this._syncEnabled = false;
         this._manualOverride = false;
+        this._activeEffectItem = null;
         this._solarTimer = null;
         this._updatingSyncSwitch = false;
         this._wallpaperMonitor = null;
@@ -139,6 +140,7 @@ export default class RobobloqLedExtension extends Extension {
         this._addAction(t('Bleu doux'), () => this._setFixedColor(10, 132, 255, 35));
         this._addAction(t('Eteindre'), () => {
             this._setSyncEnabled(false, true);
+            this._setActiveEffectItem(null);
             callDaemon('Off');
         });
 
@@ -151,6 +153,7 @@ export default class RobobloqLedExtension extends Extension {
 
     _setFixedColor(r, g, b, brightness) {
         this._setSyncEnabled(false, true);
+        this._setActiveEffectItem(null);
         callDaemon('SetColor', new GLib.Variant('(iiii)', [r, g, b, brightness]));
     }
 
@@ -160,6 +163,7 @@ export default class RobobloqLedExtension extends Extension {
             : new PopupMenu.PopupMenuItem(label);
         item.connect('activate', () => {
             this._setSyncEnabled(false, true);
+            this._setActiveEffectItem(item);
             callDaemon('StartHardwareEffect', new GLib.Variant('(i)', [effectId]));
         });
         menu.addMenuItem(item);
@@ -169,6 +173,7 @@ export default class RobobloqLedExtension extends Extension {
         const item = new PopupMenu.PopupImageMenuItem(label, icon);
         item.connect('activate', () => {
             this._setSyncEnabled(false, true);
+            this._setActiveEffectItem(item);
             callDaemon('StartRhythm', new GLib.Variant('(i)', [effectId]));
         });
         menu.addMenuItem(item);
@@ -198,6 +203,8 @@ export default class RobobloqLedExtension extends Extension {
         if (manual)
             this._manualOverride = true;
         if (enabled)
+            this._setActiveEffectItem(null);
+        if (enabled)
             this._startSync();
         else
             this._stopSync();
@@ -206,6 +213,14 @@ export default class RobobloqLedExtension extends Extension {
             this._sync.setToggleState(enabled);
             this._updatingSyncSwitch = false;
         }
+    }
+
+    _setActiveEffectItem(item) {
+        if (this._activeEffectItem === item)
+            return;
+        this._activeEffectItem?.setOrnament(PopupMenu.Ornament.NONE);
+        this._activeEffectItem = item;
+        item?.setOrnament(PopupMenu.Ornament.DOT);
     }
 
     _startSync() {
