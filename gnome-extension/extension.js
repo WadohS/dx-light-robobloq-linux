@@ -154,21 +154,10 @@ export default class RobobloqLedExtension extends Extension {
             const report = buildReport(this._nextCounter(device));
             try {
                 const stream = Gio.File.new_for_path(device).append_to(Gio.FileCreateFlags.NONE, null);
-                stream.write_all_async(report, GLib.PRIORITY_DEFAULT, null, (source, result) => {
-                    try {
-                        source.write_all_finish(result);
-                    } catch (error) {
-                        console.warn(`ROBOBLOQ LED raw HID write to ${device} failed: ${error.message}`);
-                    } finally {
-                        source.close_async(GLib.PRIORITY_DEFAULT, null, (_stream, closeResult) => {
-                            try {
-                                _stream.close_finish(closeResult);
-                            } catch (error) {
-                                console.warn(`ROBOBLOQ LED closing ${device} failed: ${error.message}`);
-                            }
-                        });
-                    }
-                });
+                const [written, count] = stream.write_all(report, null);
+                stream.close(null);
+                if (!written || count !== 64)
+                    throw new Error(`wrote ${count} bytes instead of 64`);
             } catch (error) {
                 console.warn(`ROBOBLOQ LED opening ${device} for raw HID output failed: ${error.message}`);
             }
