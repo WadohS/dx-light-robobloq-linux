@@ -157,19 +157,23 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
     }
 
     _build(page, devices, layout) {
+        const configuredDevices = [...new Set([
+            ...devices,
+            ...layout.displays.map(display => display.device).filter(device => typeof device === 'string'),
+        ])];
         const intro = new Adw.PreferencesGroup({
             title: 'DX-Light Configuration',
             description: 'Un bandeau par écran. Répartis les LEDs sur trois ou quatre côtés selon la pose réelle.',
         });
         intro.add(new Adw.ActionRow({
-            title: `${devices.length} contrôleur(s) détecté(s)`,
+            title: `${configuredDevices.length} contrôleur(s) configuré(s)`,
             subtitle: 'Les réglages sont enregistrés localement et lus au prochain démarrage du service.',
         }));
         page.add(intro);
 
         const widgets = [];
         for (const [index, display] of layout.displays.entries())
-            widgets.push(this._addDisplay(page, index, display, devices));
+            widgets.push(this._addDisplay(page, index, display, configuredDevices));
         const session = this._addSession(page, layout.session);
         const schedule = this._addSchedule(page, layout.schedule);
 
@@ -185,7 +189,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
 
         saveButton.connect('clicked', () => {
             const displays = widgets.map(display => ({
-                device: devices[display.device.selected],
+                device: configuredDevices[display.device.selected],
                 screen: display.screen.selected === 0 ? 'left' : 'right',
                 location: ['back', 'top', 'bottom', 'left', 'right'][display.location.selected],
                 installation_direction: display.direction.selected === 0 ? 'left-to-right' : 'right-to-left',
