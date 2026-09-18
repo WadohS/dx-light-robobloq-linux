@@ -14,9 +14,8 @@ Includes a simple **web UI** (color picker) and a small **CLI**.
 - Control multiple connected DX-Light controllers
 - Built-in dynamic effects, controller rhythm presets, and effect speed
 - Per-display LED-zone configuration (left, top, right, bottom)
-- Local FastAPI configuration UI at `http://127.0.0.1:8000`
+- GNOME Shell extension with direct local HID control, without a background API service
 - GNOME Shell extension sources in `gnome-extension/`
-- Wallpaper synchronization and session lock actions
 - Works without the vendor Windows app
 - Web UI (FastAPI + simple HTML color picker)
 - Auto-detects the correct vendor HID interface (`06 00 ff` report descriptor)
@@ -34,17 +33,9 @@ cd dx-light-robobloq-linux
 ./install.sh
 ```
 
-The installer creates a user-local Python environment, installs the GNOME
-extension, and enables the API plus the lock-session monitor. Log out and back
-in before using the panel extension.
-
-Wallpaper synchronization is optional because it expects a composite wallpaper
-at `~/.local/share/dual-wallpaper/wallpaper-composite.jpg`, such as the one
-created by [Dual Desktop](https://github.com/WadohS/dual-desktop):
-
-```bash
-systemctl --user enable --now robobloq-wallpaper-sync.service
-```
+The installer installs the GNOME extension. It writes directly to the configured
+HID controllers and needs no FastAPI or systemd background service. Log out and
+back in before using the panel extension.
 
 ---
 
