@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 
 from gi.repository import Gio, GLib
 
@@ -118,14 +119,19 @@ class RobobloqDaemon:
         self._stop_sync()
         monitor = int(monitor)
         with mss.mss() as capture:
-            if monitor < 1 or monitor >= len(capture.monitors):
-                raise ValueError(f"Invalid monitor index {monitor}. Available: 1..{len(capture.monitors) - 1}")
+            controller_count = len(self._get_controller().controllers)
+            if monitor < 1 or monitor + controller_count > len(capture.monitors):
+                raise ValueError(
+                    f"Need {controller_count} monitors from index {monitor}. "
+                    f"Available: 1..{len(capture.monitors) - 1}"
+                )
         config = (monitor, _clamp(fps, 1, 120), _clamp(thickness, 1, 400),
                   _clamp(downscale, 1, 16), max(0.0, min(1.0, float(alpha))),
                   _clamp(threshold, 0, 255 * 3))
-        # Discover HID before acknowledging the asynchronous operation.
+        # Each controller follows its matching monitor, starting at the selected index.
         with self._hid_lock:
-            self._get_controller().stop_dxlight_effect()
+            for controller in self._get_controller().controllers:
+                controller.stop_dxlight_effect()
         self._sync_stop.clear()
         self._sync_thread = threading.Thread(
             target=self._screen_sync_loop, args=config, name="robobloq-screen-sync", daemon=True
@@ -138,29 +144,31 @@ class RobobloqDaemon:
         import mss
         import numpy as np
 
-        smooth = np.zeros(3, dtype=np.float32)
-        last_rgb = (-1, -1, -1)
+        with self._hid_lock:
+            controllers = list(self._get_controller().controllers)
+        smooth = [np.zeros(3, dtype=np.float32) for _controller in controllers]
+        last_rgb = [(-1, -1, -1) for _controller in controllers]
         interval = 1.0 / fps
         try:
             with mss.mss() as capture:
-                screen = capture.monitors[monitor]
                 while not self._sync_stop.is_set():
                     started = time.monotonic()
                     if not SESSION_LOCK_PATH.exists():
-                        frame = np.array(capture.grab(screen))[:, :, :3][:, :, ::-1]
-                        image = frame[::downscale, ::downscale, :]
-                        height, width, _ = image.shape
-                        edge = max(1, min(thickness, width // 4, height // 4))
-                        target = (0.25 * image[:, :edge].mean(axis=(0, 1))
-                                  + 0.50 * image[:edge, :].mean(axis=(0, 1))
-                                  + 0.25 * image[:, width - edge:].mean(axis=(0, 1)))
-                        smooth = (1.0 - alpha) * smooth + alpha * target
-                        rgb = tuple(np.clip(smooth, 0, 255).astype(int))
-                        if sum(abs(a - b) for a, b in zip(rgb, last_rgb)) > threshold:
-                            with self._hid_lock:
-                                if not self._sync_stop.is_set():
-                                    self._get_controller().set_color(*rgb)
-                                    last_rgb = rgb
+                        for index, controller in enumerate(controllers):
+                            frame = np.array(capture.grab(capture.monitors[monitor + index]))[:, :, :3][:, :, ::-1]
+                            image = frame[::downscale, ::downscale, :]
+                            height, width, _ = image.shape
+                            edge = max(1, min(thickness, width // 4, height // 4))
+                            target = (0.25 * image[:, :edge].mean(axis=(0, 1))
+                                      + 0.50 * image[:edge, :].mean(axis=(0, 1))
+                                      + 0.25 * image[:, width - edge:].mean(axis=(0, 1)))
+                            smooth[index] = (1.0 - alpha) * smooth[index] + alpha * target
+                            rgb = tuple(np.clip(smooth[index], 0, 255).astype(int))
+                            if sum(abs(a - b) for a, b in zip(rgb, last_rgb[index])) > threshold:
+                                with self._hid_lock:
+                                    if not self._sync_stop.is_set():
+                                        controller.set_color(*rgb)
+                                        last_rgb[index] = rgb
                     self._sync_stop.wait(max(0.0, interval - (time.monotonic() - started)))
         finally:
             # Do not clear the shared stop event: a replacement sync may already use it.
@@ -186,6 +194,7 @@ class RobobloqDaemon:
         except (OSError, RuntimeError, ValueError) as error:
             invocation.return_dbus_error(f"{INTERFACE_NAME}.Error", str(error))
         except Exception:
+            traceback.print_exc()
             invocation.return_dbus_error(f"{INTERFACE_NAME}.Error", "Unexpected daemon error")
 
 

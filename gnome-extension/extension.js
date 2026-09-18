@@ -153,7 +153,7 @@ export default class RobobloqLedExtension extends Extension {
     }
 
     _startSync() {
-        callDaemon('StartScreenSync', new GLib.Variant('(iiiidi)', [2, 60, 80, 4, 0.35, 6]));
+        callDaemon('StartScreenSync', new GLib.Variant('(iiiidi)', [1, 60, 80, 4, 0.35, 6]));
     }
 
     _stopSync() {
