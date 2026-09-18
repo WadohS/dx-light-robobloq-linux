@@ -13,6 +13,7 @@ const OBJECT_PATH = '/io/github/wadohs/RobobloqLed';
 const INTERFACE_NAME = BUS_NAME;
 const LAYOUT_PATH = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'robobloq-led', 'layout.json']);
 const BLACK_FALLBACK = [77, 77, 77]; // White at 30 percent brightness.
+const BLACK_THRESHOLD = 10; // JPEG compression makes a black wallpaper slightly non-zero.
 const PARIS = {latitude: 48.8566, longitude: 2.3522};
 const EN = {
     'Synchronisation écran': 'Screen synchronization', 'Effets': 'Effects',
@@ -370,7 +371,7 @@ export default class RobobloqLedExtension extends Extension {
             }
         }
         const color = total.map(value => Math.round(value / count));
-        return color.every(value => value < 5) ? BLACK_FALLBACK : color;
+        return color.every(value => value <= BLACK_THRESHOLD) ? BLACK_FALLBACK : color;
     }
 
     _addAction(label, callback) {
