@@ -98,6 +98,7 @@ export default class RobobloqLedExtension extends Extension {
         this._syncEnabled = false;
         this._manualOverride = false;
         this._activeEffectItem = null;
+        this._manualAction = () => callDaemon('Off');
         this._solarTimer = null;
         this._updatingSyncSwitch = false;
         this._wallpaperMonitor = null;
@@ -138,11 +139,7 @@ export default class RobobloqLedExtension extends Extension {
 
         this._addAction(t('Blanc chaud'), () => this._setFixedColor(255, 200, 120, 30));
         this._addAction(t('Bleu doux'), () => this._setFixedColor(10, 132, 255, 35));
-        this._addAction(t('Eteindre'), () => {
-            this._setSyncEnabled(false, true);
-            this._setActiveEffectItem(null);
-            callDaemon('Off');
-        });
+        this._addAction(t('Eteindre'), () => this._setManualAction(() => callDaemon('Off')));
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addAction(t('Préférences'), () => this.openPreferences());
@@ -152,9 +149,8 @@ export default class RobobloqLedExtension extends Extension {
     }
 
     _setFixedColor(r, g, b, brightness) {
-        this._setSyncEnabled(false, true);
-        this._setActiveEffectItem(null);
-        callDaemon('SetColor', new GLib.Variant('(iiii)', [r, g, b, brightness]));
+        this._setManualAction(() =>
+            callDaemon('SetColor', new GLib.Variant('(iiii)', [r, g, b, brightness])));
     }
 
     _addEffect(menu, label, effectId, icon = null) {
@@ -162,9 +158,8 @@ export default class RobobloqLedExtension extends Extension {
             ? new PopupMenu.PopupImageMenuItem(label, icon)
             : new PopupMenu.PopupMenuItem(label);
         item.connect('activate', () => {
-            this._setSyncEnabled(false, true);
-            this._setActiveEffectItem(item);
-            callDaemon('StartHardwareEffect', new GLib.Variant('(i)', [effectId]));
+            this._setManualAction(() =>
+                callDaemon('StartHardwareEffect', new GLib.Variant('(i)', [effectId])), item);
         });
         menu.addMenuItem(item);
     }
@@ -172,9 +167,8 @@ export default class RobobloqLedExtension extends Extension {
     _addRhythm(menu, label, effectId, icon) {
         const item = new PopupMenu.PopupImageMenuItem(label, icon);
         item.connect('activate', () => {
-            this._setSyncEnabled(false, true);
-            this._setActiveEffectItem(item);
-            callDaemon('StartRhythm', new GLib.Variant('(i)', [effectId]));
+            this._setManualAction(() =>
+                callDaemon('StartRhythm', new GLib.Variant('(i)', [effectId])), item);
         });
         menu.addMenuItem(item);
     }
@@ -206,13 +200,26 @@ export default class RobobloqLedExtension extends Extension {
             this._setActiveEffectItem(null);
         if (enabled)
             this._startSync();
-        else
+        else {
+            const wasSyncEnabled = this._syncEnabled;
             this._stopSync();
+            if (wasSyncEnabled)
+                this._manualAction();
+        }
         if (this._sync.state !== enabled) {
             this._updatingSyncSwitch = true;
             this._sync.setToggleState(enabled);
             this._updatingSyncSwitch = false;
         }
+    }
+
+    _setManualAction(action, item = null) {
+        this._manualAction = action;
+        this._setActiveEffectItem(item);
+        const wasSyncEnabled = this._syncEnabled;
+        this._setSyncEnabled(false, true);
+        if (!wasSyncEnabled)
+            action();
     }
 
     _setActiveEffectItem(item) {
