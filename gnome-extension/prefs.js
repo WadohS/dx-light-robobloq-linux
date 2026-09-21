@@ -79,7 +79,7 @@ function defaultLayout(devices) {
     return {
         version: 2,
         session: defaultSession(),
-        schedule: {enabled: true, latitude: 48.8566, longitude: 2.3522},
+        schedule: {enabled: true, latitude: 48.8566, longitude: 2.3522, manualOff: false},
         displays: devices.map((device, index) => ({
             device,
             screen: index === 0 ? 'left' : 'right',

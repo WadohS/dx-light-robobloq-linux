@@ -97,6 +97,7 @@ export default class RobobloqLedExtension extends Extension {
     enable() {
         this._syncEnabled = false;
         this._manualOverride = false;
+        this._manualOff = this._loadSchedule().manualOff;
         this._activeEffectItem = null;
         this._manualAction = () => callDaemon('Off');
         this._solarTimer = null;
@@ -139,7 +140,7 @@ export default class RobobloqLedExtension extends Extension {
 
         this._addAction(t('Blanc chaud'), () => this._setFixedColor(255, 200, 120, 30));
         this._addAction(t('Bleu doux'), () => this._setFixedColor(10, 132, 255, 35));
-        this._addAction(t('Eteindre'), () => this._setManualAction(() => callDaemon('Off')));
+        this._addAction(t('Eteindre'), () => this._setManualAction(() => callDaemon('Off'), null, true));
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._addAction(t('Préférences'), () => this.openPreferences());
@@ -196,6 +197,8 @@ export default class RobobloqLedExtension extends Extension {
     _setSyncEnabled(enabled, manual) {
         if (manual)
             this._manualOverride = true;
+        if (manual && enabled)
+            this._setManualOff(false);
         if (enabled)
             this._setActiveEffectItem(null);
         if (enabled)
@@ -213,7 +216,8 @@ export default class RobobloqLedExtension extends Extension {
         }
     }
 
-    _setManualAction(action, item = null) {
+    _setManualAction(action, item = null, manualOff = false) {
+        this._setManualOff(manualOff);
         this._manualAction = action;
         this._setActiveEffectItem(item);
         const wasSyncEnabled = this._syncEnabled;
@@ -269,9 +273,27 @@ export default class RobobloqLedExtension extends Extension {
                 enabled: schedule.enabled === true,
                 latitude: Number.isFinite(schedule.latitude) ? schedule.latitude : PARIS.latitude,
                 longitude: Number.isFinite(schedule.longitude) ? schedule.longitude : PARIS.longitude,
+                manualOff: schedule.manualOff === true,
             };
         } catch (_error) {
             return {...PARIS, enabled: true};
+        }
+    }
+
+    _setManualOff(enabled) {
+        if (this._manualOff === enabled)
+            return;
+        try {
+            const file = Gio.File.new_for_path(LAYOUT_PATH);
+            const [, contents] = file.load_contents(null);
+            const layout = JSON.parse(new TextDecoder().decode(contents));
+            layout.schedule = {...layout.schedule, manualOff: enabled};
+            file.replace_contents(
+                new TextEncoder().encode(`${JSON.stringify(layout, null, 2)}\n`), null, false,
+                Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+            this._manualOff = enabled;
+        } catch (error) {
+            console.warn(`ROBOBLOQ LED cannot save manual off state: ${error.message}`);
         }
     }
 
@@ -288,8 +310,12 @@ export default class RobobloqLedExtension extends Extension {
         const sunset = solarTime(now, schedule.latitude, schedule.longitude, false);
         if (!sunrise || !sunset)
             return;
-        if (!this._manualOverride)
+        if (schedule.manualOff) {
+            this._setSyncEnabled(false, false);
+            callDaemon('Off');
+        } else if (!this._manualOverride) {
             this._setSyncEnabled(now < sunrise || now >= sunset, false);
+        }
         const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         const next = now < sunrise ? sunrise : now < sunset ? sunset : solarTime(
             tomorrow, schedule.latitude, schedule.longitude, true);
