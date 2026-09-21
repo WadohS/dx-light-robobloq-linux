@@ -6,10 +6,11 @@ per-controller protocol counters cannot be interleaved by multiple clients.
 
 from __future__ import annotations
 
+import signal
 import threading
 import traceback
 
-from gi.repository import Gio, GLib
+from gi.repository import Gio, GLib, GLibUnix
 
 from .device import RobobloqControllers, SESSION_LOCK_PATH
 
@@ -136,10 +137,21 @@ def main() -> None:
     owner_id = Gio.bus_own_name(
         Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE, on_bus_acquired, None, None
     )
+
+    def shutdown() -> bool:
+        try:
+            daemon.off()
+        except Exception:
+            traceback.print_exc()
+        loop.quit()
+        return GLib.SOURCE_REMOVE
+
+    GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, shutdown)
+    GLibUnix.signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, shutdown)
     try:
         loop.run()
     finally:
-        daemon.stop()
+        daemon.off()
         Gio.bus_unown_name(owner_id)
 
 
