@@ -98,6 +98,7 @@ export default class RobobloqLedExtension extends Extension {
         this._syncEnabled = false;
         this._manualOverride = false;
         this._manualOff = this._loadSchedule().manualOff;
+        this._startupMode = this._loadStartupMode();
         this._activeEffectItem = null;
         this._manualAction = () => callDaemon('Off');
         this._solarTimer = null;
@@ -146,6 +147,12 @@ export default class RobobloqLedExtension extends Extension {
         this._addAction(t('Préférences'), () => this.openPreferences());
 
         Main.panel.addToStatusArea(this.uuid, this._indicator);
+        if (this._startupMode === 'off') {
+            this._manualOverride = true;
+            callDaemon('Off');
+        } else if (this._startupMode === 'schedule') {
+            this._setManualOff(false);
+        }
         this._configureSolarSchedule();
     }
 
@@ -294,6 +301,16 @@ export default class RobobloqLedExtension extends Extension {
             this._manualOff = enabled;
         } catch (error) {
             console.warn(`ROBOBLOQ LED cannot save manual off state: ${error.message}`);
+        }
+    }
+
+    _loadStartupMode() {
+        try {
+            const [, contents] = Gio.File.new_for_path(LAYOUT_PATH).load_contents(null);
+            const mode = JSON.parse(new TextDecoder().decode(contents)).startup?.mode;
+            return ['off', 'schedule', 'unchanged'].includes(mode) ? mode : 'off';
+        } catch (_error) {
+            return 'off';
         }
     }
 

@@ -80,6 +80,7 @@ function defaultLayout(devices) {
         version: 2,
         session: defaultSession(),
         schedule: {enabled: true, latitude: 48.8566, longitude: 2.3522, manualOff: false},
+        startup: {mode: 'off'},
         displays: devices.map((device, index) => ({
             device,
             screen: index === 0 ? 'left' : 'right',
@@ -105,6 +106,7 @@ function loadLayout(devices, callback) {
             layout.session.lock = layout.session.lock && typeof layout.session.lock === 'object' ? layout.session.lock : defaults.lock;
             layout.session.unlock = layout.session.unlock && typeof layout.session.unlock === 'object' ? layout.session.unlock : defaults.unlock;
             layout.schedule = layout.schedule && typeof layout.schedule === 'object' ? layout.schedule : {enabled: true, latitude: 48.8566, longitude: 2.3522};
+            layout.startup = layout.startup && typeof layout.startup === 'object' ? layout.startup : {mode: 'off'};
             callback(null, layout);
         } catch (_error) {
             callback(null, defaultLayout(devices));
@@ -177,6 +179,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         const widgets = [];
         for (const [index, display] of layout.displays.entries())
             widgets.push(this._addDisplay(page, index, display, configuredDevices));
+        const startup = this._addStartup(page, layout.startup);
         const session = this._addSession(page, layout.session);
         const schedule = this._addSchedule(page, layout.schedule);
 
@@ -202,7 +205,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
             }));
             saveButton.sensitive = false;
             result.title = 'Enregistrement...';
-            saveLayout({version: 2, displays, session: this._sessionPayload(session), schedule: this._schedulePayload(schedule)}, error => {
+            saveLayout({version: 2, displays, startup: this._startupPayload(startup), session: this._sessionPayload(session), schedule: this._schedulePayload(schedule)}, error => {
                 saveButton.sensitive = true;
                 result.title = error ? 'Enregistrement impossible' : 'Configuration enregistrée';
                 result.subtitle = error ? error.message : 'Les réglages seront lus au prochain redémarrage du service.';
@@ -229,6 +232,23 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         return {lock: addAction('Au verrouillage', session.lock), unlock: addAction('Au déverrouillage', session.unlock)};
     }
 
+    _addStartup(page, startup) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Démarrage de session',
+            description: 'Les LEDs peuvent rester allumées pendant le BIOS. Cette action est appliquée dès que GNOME ouvre votre session.',
+        });
+        page.add(group);
+        const modes = ['Éteindre les LEDs', 'Reprendre la planification solaire', 'Ne pas modifier les LEDs'];
+        const values = ['off', 'schedule', 'unchanged'];
+        const mode = dropdown(modes, values.indexOf(startup.mode));
+        addRow(group, 'Au démarrage', 'Éteindre est le choix recommandé après une coupure de courant.', mode);
+        return {mode};
+    }
+
+    _startupPayload(startup) {
+        return {mode: ['off', 'schedule', 'unchanged'][startup.mode.selected]};
+    }
+
     _sessionPayload(session) {
         const action = widgets => ({
             mode: ['off', 'sync', 'effect'][widgets.mode.selected],
@@ -253,7 +273,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         longitude.set_digits(4);
         longitude.set_value(Number.isFinite(schedule.longitude) ? schedule.longitude : 2.3522);
         addRow(group, 'Longitude', 'Paris : 2.3522', longitude);
-        return {enabled, latitude, longitude};
+        return {enabled, latitude, longitude, manualOff: schedule.manualOff === true};
     }
 
     _schedulePayload(schedule) {
@@ -261,6 +281,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
             enabled: schedule.enabled.active,
             latitude: schedule.latitude.get_value(),
             longitude: schedule.longitude.get_value(),
+            manualOff: schedule.manualOff === true,
         };
     }
 
