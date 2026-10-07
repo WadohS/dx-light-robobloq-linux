@@ -17,7 +17,7 @@ const EN = {
     'Derrière l’écran': 'Behind display', 'Au-dessus de l’écran': 'Above display', 'Sous l’écran': 'Below display', 'À gauche de l’écran': 'Left of display', 'À droite de l’écran': 'Right of display',
     'De gauche vers la droite': 'Left to right', 'De droite vers la gauche': 'Right to left', 'Bord de l’écran': 'Display edge', 'Centre de l’écran': 'Display center',
     '3 côtés': '3 sides', '4 côtés': '4 sides', 'LEDs à gauche': 'Left LEDs', 'LEDs en haut': 'Top LEDs', 'LEDs à droite': 'Right LEDs', 'LEDs en bas': 'Bottom LEDs',
-    'Planification solaire': 'Solar schedule', 'Activer la synchronisation du coucher au lever': 'Enable synchronization from sunset to sunrise', 'Latitude': 'Latitude', 'Longitude': 'Longitude',
+    'Synchronisation écran': 'Screen synchronization', 'Couleur globale par écran': 'One global color per display', 'Couleurs par zones du bandeau': 'Colors by LED strip zones', 'Planification solaire': 'Solar schedule', 'Activer la synchronisation du coucher au lever': 'Enable synchronization from sunset to sunrise', 'Latitude': 'Latitude', 'Longitude': 'Longitude',
 };
 const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const EDGE_KEYS = ['left', 'top', 'right', 'bottom'];
@@ -80,6 +80,7 @@ function defaultLayout(devices) {
         version: 2,
         session: defaultSession(),
         schedule: {enabled: true, latitude: 48.8566, longitude: 2.3522, manualOff: false},
+        sync: {mode: 'global'},
         startup: {mode: 'off'},
         displays: devices.map((device, index) => ({
             device,
@@ -107,6 +108,7 @@ function loadLayout(devices, callback) {
             layout.session.unlock = layout.session.unlock && typeof layout.session.unlock === 'object' ? layout.session.unlock : defaults.unlock;
             layout.schedule = layout.schedule && typeof layout.schedule === 'object' ? layout.schedule : {enabled: true, latitude: 48.8566, longitude: 2.3522};
             layout.startup = layout.startup && typeof layout.startup === 'object' ? layout.startup : {mode: 'off'};
+            layout.sync = layout.sync && typeof layout.sync === 'object' ? layout.sync : {mode: 'global'};
             callback(null, layout);
         } catch (_error) {
             callback(null, defaultLayout(devices));
@@ -180,6 +182,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         for (const [index, display] of layout.displays.entries())
             widgets.push(this._addDisplay(page, index, display, configuredDevices));
         const startup = this._addStartup(page, layout.startup);
+        const sync = this._addSync(page, layout.sync);
         const session = this._addSession(page, layout.session);
         const schedule = this._addSchedule(page, layout.schedule);
 
@@ -205,7 +208,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
             }));
             saveButton.sensitive = false;
             result.title = 'Enregistrement...';
-            saveLayout({version: 2, displays, startup: this._startupPayload(startup), session: this._sessionPayload(session), schedule: this._schedulePayload(schedule)}, error => {
+            saveLayout({version: 2, displays, startup: this._startupPayload(startup), sync: this._syncPayload(sync), session: this._sessionPayload(session), schedule: this._schedulePayload(schedule)}, error => {
                 saveButton.sensitive = true;
                 result.title = error ? 'Enregistrement impossible' : 'Configuration enregistrée';
                 result.subtitle = error ? error.message : 'Les réglages seront lus au prochain redémarrage du service.';
@@ -243,6 +246,21 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         const mode = dropdown(modes, values.indexOf(startup.mode));
         addRow(group, 'Au démarrage', 'Éteindre est le choix recommandé après une coupure de courant.', mode);
         return {mode};
+    }
+
+    _addSync(page, sync) {
+        const group = new Adw.PreferencesGroup({
+            title: 'Synchronisation écran',
+            description: 'Les couleurs par zones prélèvent séparément les bords gauche, haut, droit et bas du fond d’écran.',
+        });
+        page.add(group);
+        const mode = dropdown(['Couleur globale par écran', 'Couleurs par zones du bandeau'], sync.mode === 'zones' ? 1 : 0);
+        addRow(group, 'Mode de couleur', 'Utilise les zones configurées pour chaque bandeau.', mode);
+        return {mode};
+    }
+
+    _syncPayload(sync) {
+        return {mode: sync.mode.selected === 1 ? 'zones' : 'global'};
     }
 
     _startupPayload(startup) {

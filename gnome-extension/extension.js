@@ -107,6 +107,7 @@ export default class RobobloqLedExtension extends Extension {
         this._wallpaperMonitorPath = null;
         this._wallpaperUpdateTimer = null;
         this._displays = this._loadDisplays();
+        this._syncMode = this._loadSyncMode();
         this._backgroundSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.background'});
         this._interfaceSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
         this._wallpaperChangedId = this._backgroundSettings.connect('changed', () => this._resetWallpaperMonitor());
@@ -243,6 +244,7 @@ export default class RobobloqLedExtension extends Extension {
 
     _startSync() {
         this._displays = this._loadDisplays();
+        this._syncMode = this._loadSyncMode();
         if (this._displays.length === 0) {
             console.warn('ROBOBLOQ LED has no configured displays for screen synchronization');
             this._sync.setToggleState(false);
@@ -269,6 +271,15 @@ export default class RobobloqLedExtension extends Extension {
         } catch (error) {
             console.warn(`ROBOBLOQ LED cannot load ${LAYOUT_PATH}: ${error.message}`);
             return [];
+        }
+    }
+
+    _loadSyncMode() {
+        try {
+            const [, contents] = Gio.File.new_for_path(LAYOUT_PATH).load_contents(null);
+            return JSON.parse(new TextDecoder().decode(contents)).sync?.mode === 'zones' ? 'zones' : 'global';
+        } catch (_error) {
+            return 'global';
         }
     }
 
@@ -364,10 +375,14 @@ export default class RobobloqLedExtension extends Extension {
                 const monitor = this._monitorForDisplay(display);
                 if (!monitor)
                     throw new Error(`no monitor available for ${display.screen}`);
-                return this._averageWallpaperArea(image, monitor, left, top, right - left, bottom - top);
+                return this._syncMode === 'zones'
+                    ? this._wallpaperZoneColors(image, monitor, left, top, right - left, bottom - top)
+                    : this._averageWallpaperArea(image, monitor, left, top, right - left, bottom - top);
             });
-            console.log(`ROBOBLOQ LED wallpaper colors: ${JSON.stringify(colors)}`);
-            callDaemon('SetScreenColors', new GLib.Variant('(a(iii))', [colors]));
+            console.log(`ROBOBLOQ LED wallpaper ${this._syncMode} colors: ${JSON.stringify(colors)}`);
+            callDaemon(
+                this._syncMode === 'zones' ? 'SetScreenZoneColors' : 'SetScreenColors',
+                new GLib.Variant(this._syncMode === 'zones' ? '(aa(iii))' : '(a(iii))', [colors]));
         } catch (error) {
             console.warn(`ROBOBLOQ LED wallpaper sample failed: ${error.message}`);
         }
@@ -421,6 +436,25 @@ export default class RobobloqLedExtension extends Extension {
         const imageY = Math.floor((monitor.y - desktopTop) * image.height / desktopHeight);
         const imageWidth = Math.max(1, Math.ceil(monitor.width * image.width / desktopWidth));
         const imageHeight = Math.max(1, Math.ceil(monitor.height * image.height / desktopHeight));
+        return this._averageImageArea(image, imageX, imageY, imageWidth, imageHeight);
+    }
+
+    _wallpaperZoneColors(image, monitor, desktopLeft, desktopTop, desktopWidth, desktopHeight) {
+        const imageX = Math.floor((monitor.x - desktopLeft) * image.width / desktopWidth);
+        const imageY = Math.floor((monitor.y - desktopTop) * image.height / desktopHeight);
+        const imageWidth = Math.max(1, Math.ceil(monitor.width * image.width / desktopWidth));
+        const imageHeight = Math.max(1, Math.ceil(monitor.height * image.height / desktopHeight));
+        const horizontalBand = Math.max(1, Math.round(imageWidth * 0.18));
+        const verticalBand = Math.max(1, Math.round(imageHeight * 0.18));
+        return [
+            this._averageImageArea(image, imageX, imageY, horizontalBand, imageHeight),
+            this._averageImageArea(image, imageX, imageY, imageWidth, verticalBand),
+            this._averageImageArea(image, imageX + imageWidth - horizontalBand, imageY, horizontalBand, imageHeight),
+            this._averageImageArea(image, imageX, imageY + imageHeight - verticalBand, imageWidth, verticalBand),
+        ];
+    }
+
+    _averageImageArea(image, imageX, imageY, imageWidth, imageHeight) {
         const pixels = image.get_pixels();
         const channels = image.get_n_channels();
         const stride = image.get_rowstride();

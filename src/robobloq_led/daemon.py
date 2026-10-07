@@ -12,7 +12,7 @@ import traceback
 
 from gi.repository import Gio, GLib, GLibUnix
 
-from .device import RobobloqControllers, SESSION_LOCK_PATH
+from .device import RobobloqControllers, SESSION_LOCK_PATH, load_layout
 
 
 BUS_NAME = "io.github.wadohs.RobobloqLed"
@@ -30,6 +30,9 @@ INTROSPECTION_XML = f"""
     </method>
     <method name="SetScreenColors">
       <arg name="colors" type="a(iii)" direction="in"/>
+    </method>
+    <method name="SetScreenZoneColors">
+      <arg name="colors" type="aa(iii)" direction="in"/>
     </method>
     <method name="Off"/>
     <method name="StartHardwareEffect"><arg name="effectId" type="i" direction="in"/></method>
@@ -103,12 +106,50 @@ class RobobloqDaemon:
             print(f"DX-Light Shell colors={normalized}", flush=True)
             self._last_screen_colors = normalized
 
+    def set_screen_zone_colors(self, colors: list[list[tuple[int, int, int]]]) -> None:
+        """Set one wallpaper-derived color per configured LED edge zone."""
+        if SESSION_LOCK_PATH.exists():
+            return
+        displays = load_layout()["displays"]
+        normalized = [
+            [tuple(_clamp(channel, 0, 255) for channel in rgb) for rgb in display_colors]
+            for display_colors in colors
+        ]
+        if len(normalized) != len(displays):
+            raise ValueError(f"Need {len(displays)} display zone colors; received {len(normalized)}.")
+        with self._hid_lock:
+            controllers = self._get_controller().controllers
+            if len(normalized) != len(controllers):
+                raise ValueError(f"Need {len(controllers)} controller zone colors; received {len(normalized)}.")
+            self._stop_hardware_effect()
+            for controller, display, zone_colors in zip(controllers, displays, normalized):
+                if len(zone_colors) != 4:
+                    raise ValueError("Each display needs left, top, right, and bottom colors.")
+                zones = display.get("zones", {})
+                pixels = [
+                    color
+                    for count, color in zip(
+                        (zones.get("left", 0), zones.get("top", 0), zones.get("right", 0), zones.get("bottom", 0)),
+                        zone_colors,
+                    )
+                    for _ in range(max(0, int(count)))
+                ]
+                if not pixels:
+                    raise ValueError("A display must configure at least one LED.")
+                if display.get("installation_direction") == "right-to-left":
+                    pixels.reverse()
+                controller.set_pixels(pixels)
+        if normalized != self._last_screen_colors:
+            print(f"DX-Light Shell zone colors={normalized}", flush=True)
+            self._last_screen_colors = normalized
+
     def handle_method_call(self, _connection, _sender, _path, _interface, method, parameters, invocation) -> None:
         try:
             args = parameters.unpack()
             handlers = {
                 "SetColor": lambda: self.set_color(*args),
                 "SetScreenColors": lambda: self.set_screen_colors(*args),
+                "SetScreenZoneColors": lambda: self.set_screen_zone_colors(*args),
                 "Off": self.off,
                 "StartHardwareEffect": lambda: self.start_hardware_effect(*args),
                 "StartRhythm": lambda: self.start_rhythm(*args),

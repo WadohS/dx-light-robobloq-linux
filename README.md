@@ -146,7 +146,8 @@ Supports:
 - Adjustable FPS and edge thickness
 
 On GNOME Wayland, the extension samples the configured wallpaper image and
-sends one color per display to the local D-Bus daemon. Windows are excluded;
+sends either one color per display or one color per configured LED edge zone
+to the local D-Bus daemon. Windows are excluded;
 no Portal permission, PipeWire stream, or screen-sharing indicator is used.
 
 Example:
