@@ -17,7 +17,7 @@ const EN = {
     'Derrière l’écran': 'Behind display', 'Au-dessus de l’écran': 'Above display', 'Sous l’écran': 'Below display', 'À gauche de l’écran': 'Left of display', 'À droite de l’écran': 'Right of display',
     'De gauche vers la droite': 'Left to right', 'De droite vers la gauche': 'Right to left', 'Bord de l’écran': 'Display edge', 'Centre de l’écran': 'Display center',
     '3 côtés': '3 sides', '4 côtés': '4 sides', 'LEDs à gauche': 'Left LEDs', 'LEDs en haut': 'Top LEDs', 'LEDs à droite': 'Right LEDs', 'LEDs en bas': 'Bottom LEDs',
-    'Synchronisation écran': 'Screen synchronization', 'Couleur globale par écran': 'One global color per display', 'Couleurs par zones du bandeau': 'Colors by LED strip zones', 'Planification solaire': 'Solar schedule', 'Activer la synchronisation du coucher au lever': 'Enable synchronization from sunset to sunrise', 'Latitude': 'Latitude', 'Longitude': 'Longitude',
+    'Synchronisation écran': 'Screen synchronization', 'Couleur globale par écran': 'One global color per display', 'Couleurs par zones du bandeau': 'Colors by LED strip zones', 'Couleurs par LED': 'Colors per LED', 'Planification solaire': 'Solar schedule', 'Activer la synchronisation du coucher au lever': 'Enable synchronization from sunset to sunrise', 'Latitude': 'Latitude', 'Longitude': 'Longitude',
 };
 const t = text => (GLib.getenv('LANGUAGE') || GLib.getenv('LC_ALL') || GLib.getenv('LC_MESSAGES') || GLib.getenv('LANG') || '').startsWith('fr') ? text : (EN[text] || text);
 const EDGE_KEYS = ['left', 'top', 'right', 'bottom'];
@@ -251,16 +251,16 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
     _addSync(page, sync) {
         const group = new Adw.PreferencesGroup({
             title: 'Synchronisation écran',
-            description: 'Les couleurs par zones prélèvent séparément les bords gauche, haut, droit et bas du fond d’écran.',
+            description: 'Les modes par zones et par LED prélèvent séparément les bords du fond d’écran.',
         });
         page.add(group);
-        const mode = dropdown(['Couleur globale par écran', 'Couleurs par zones du bandeau'], sync.mode === 'zones' ? 1 : 0);
-        addRow(group, 'Mode de couleur', 'Utilise les zones configurées pour chaque bandeau.', mode);
+        const mode = dropdown(['Couleur globale par écran', 'Couleurs par zones du bandeau', 'Couleurs par LED'], sync.mode === 'pixels' ? 2 : sync.mode === 'zones' ? 1 : 0);
+        addRow(group, 'Mode de couleur', 'Échantillonne le fond à la position de chaque LED du bandeau.', mode);
         return {mode};
     }
 
     _syncPayload(sync) {
-        return {mode: sync.mode.selected === 1 ? 'zones' : 'global'};
+        return {mode: ['global', 'zones', 'pixels'][sync.mode.selected]};
     }
 
     _startupPayload(startup) {

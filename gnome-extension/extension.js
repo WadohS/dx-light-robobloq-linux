@@ -277,7 +277,8 @@ export default class RobobloqLedExtension extends Extension {
     _loadSyncMode() {
         try {
             const [, contents] = Gio.File.new_for_path(LAYOUT_PATH).load_contents(null);
-            return JSON.parse(new TextDecoder().decode(contents)).sync?.mode === 'zones' ? 'zones' : 'global';
+            const mode = JSON.parse(new TextDecoder().decode(contents)).sync?.mode;
+            return ['zones', 'pixels'].includes(mode) ? mode : 'global';
         } catch (_error) {
             return 'global';
         }
@@ -375,14 +376,18 @@ export default class RobobloqLedExtension extends Extension {
                 const monitor = this._monitorForDisplay(display);
                 if (!monitor)
                     throw new Error(`no monitor available for ${display.screen}`);
-                return this._syncMode === 'zones'
-                    ? this._wallpaperZoneColors(image, monitor, left, top, right - left, bottom - top)
-                    : this._averageWallpaperArea(image, monitor, left, top, right - left, bottom - top);
+                if (this._syncMode === 'zones')
+                    return this._wallpaperZoneColors(image, monitor, left, top, right - left, bottom - top);
+                if (this._syncMode === 'pixels')
+                    return this._wallpaperPixels(image, display, monitor, left, top, right - left, bottom - top);
+                return this._averageWallpaperArea(image, monitor, left, top, right - left, bottom - top);
             });
             console.log(`ROBOBLOQ LED wallpaper ${this._syncMode} colors: ${JSON.stringify(colors)}`);
+            const method = this._syncMode === 'global' ? 'SetScreenColors' :
+                this._syncMode === 'zones' ? 'SetScreenZoneColors' : 'SetScreenPixels';
             callDaemon(
-                this._syncMode === 'zones' ? 'SetScreenZoneColors' : 'SetScreenColors',
-                new GLib.Variant(this._syncMode === 'zones' ? '(aa(iii))' : '(a(iii))', [colors]));
+                method,
+                new GLib.Variant(this._syncMode === 'global' ? '(a(iii))' : '(aa(iii))', [colors]));
         } catch (error) {
             console.warn(`ROBOBLOQ LED wallpaper sample failed: ${error.message}`);
         }
@@ -452,6 +457,34 @@ export default class RobobloqLedExtension extends Extension {
             this._averageImageArea(image, imageX + imageWidth - horizontalBand, imageY, horizontalBand, imageHeight),
             this._averageImageArea(image, imageX, imageY + imageHeight - verticalBand, imageWidth, verticalBand),
         ];
+    }
+
+    _wallpaperPixels(image, display, monitor, desktopLeft, desktopTop, desktopWidth, desktopHeight) {
+        const imageX = Math.floor((monitor.x - desktopLeft) * image.width / desktopWidth);
+        const imageY = Math.floor((monitor.y - desktopTop) * image.height / desktopHeight);
+        const imageWidth = Math.max(1, Math.ceil(monitor.width * image.width / desktopWidth));
+        const imageHeight = Math.max(1, Math.ceil(monitor.height * image.height / desktopHeight));
+        const horizontalBand = Math.max(1, Math.round(imageWidth * 0.18));
+        const verticalBand = Math.max(1, Math.round(imageHeight * 0.18));
+        const zones = display.zones ?? {};
+        const sampleSide = (count, side) => Array.from({length: Math.max(0, Number(count) || 0)}, (_value, index) => {
+            if (side === 'left') {
+                const y = imageY + Math.floor((count - index - 1) * imageHeight / count);
+                return this._averageImageArea(image, imageX, y, horizontalBand, Math.ceil(imageHeight / count));
+            }
+            if (side === 'top') {
+                const x = imageX + Math.floor(index * imageWidth / count);
+                return this._averageImageArea(image, x, imageY, Math.ceil(imageWidth / count), verticalBand);
+            }
+            if (side === 'right') {
+                const y = imageY + Math.floor(index * imageHeight / count);
+                return this._averageImageArea(image, imageX + imageWidth - horizontalBand, y, horizontalBand, Math.ceil(imageHeight / count));
+            }
+            const x = imageX + Math.floor((count - index - 1) * imageWidth / count);
+            return this._averageImageArea(image, x, imageY + imageHeight - verticalBand, Math.ceil(imageWidth / count), verticalBand);
+        });
+        const pixels = ['left', 'top', 'right', 'bottom'].flatMap(side => sampleSide(zones[side], side));
+        return display.installation_direction === 'right-to-left' ? pixels.reverse() : pixels;
     }
 
     _averageImageArea(image, imageX, imageY, imageWidth, imageHeight) {

@@ -34,6 +34,9 @@ INTROSPECTION_XML = f"""
     <method name="SetScreenZoneColors">
       <arg name="colors" type="aa(iii)" direction="in"/>
     </method>
+    <method name="SetScreenPixels">
+      <arg name="pixels" type="aa(iii)" direction="in"/>
+    </method>
     <method name="Off"/>
     <method name="StartHardwareEffect"><arg name="effectId" type="i" direction="in"/></method>
     <method name="StartRhythm"><arg name="effectId" type="i" direction="in"/></method>
@@ -143,6 +146,32 @@ class RobobloqDaemon:
             print(f"DX-Light Shell zone colors={normalized}", flush=True)
             self._last_screen_colors = normalized
 
+    def set_screen_pixels(self, pixels: list[list[tuple[int, int, int]]]) -> None:
+        """Set a wallpaper-derived color for every LED in each configured strip."""
+        if SESSION_LOCK_PATH.exists():
+            return
+        displays = load_layout()["displays"]
+        normalized = [
+            [tuple(_clamp(channel, 0, 255) for channel in rgb) for rgb in display_pixels]
+            for display_pixels in pixels
+        ]
+        if len(normalized) != len(displays):
+            raise ValueError(f"Need {len(displays)} display pixel arrays; received {len(normalized)}.")
+        with self._hid_lock:
+            controllers = self._get_controller().controllers
+            if len(normalized) != len(controllers):
+                raise ValueError(f"Need {len(controllers)} controller pixel arrays; received {len(normalized)}.")
+            self._stop_hardware_effect()
+            for controller, display, display_pixels in zip(controllers, displays, normalized):
+                zones = display.get("zones", {})
+                expected = sum(max(0, int(zones.get(edge, 0))) for edge in ("left", "top", "right", "bottom"))
+                if len(display_pixels) != expected:
+                    raise ValueError(f"Need {expected} LED colors for a display; received {len(display_pixels)}.")
+                controller.set_pixels(display_pixels)
+        if normalized != self._last_screen_colors:
+            print(f"DX-Light Shell LED colors={normalized}", flush=True)
+            self._last_screen_colors = normalized
+
     def handle_method_call(self, _connection, _sender, _path, _interface, method, parameters, invocation) -> None:
         try:
             args = parameters.unpack()
@@ -150,6 +179,7 @@ class RobobloqDaemon:
                 "SetColor": lambda: self.set_color(*args),
                 "SetScreenColors": lambda: self.set_screen_colors(*args),
                 "SetScreenZoneColors": lambda: self.set_screen_zone_colors(*args),
+                "SetScreenPixels": lambda: self.set_screen_pixels(*args),
                 "Off": self.off,
                 "StartHardwareEffect": lambda: self.start_hardware_effect(*args),
                 "StartRhythm": lambda: self.start_rhythm(*args),
