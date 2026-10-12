@@ -464,24 +464,33 @@ export default class RobobloqLedExtension extends Extension {
         const imageY = Math.floor((monitor.y - desktopTop) * image.height / desktopHeight);
         const imageWidth = Math.max(1, Math.ceil(monitor.width * image.width / desktopWidth));
         const imageHeight = Math.max(1, Math.ceil(monitor.height * image.height / desktopHeight));
-        const horizontalBand = Math.max(1, Math.round(imageWidth * 0.18));
-        const verticalBand = Math.max(1, Math.round(imageHeight * 0.18));
         const zones = display.zones ?? {};
+        const sampling = display.sampling ?? {};
+        const edgeDepth = Math.min(0.2, Math.max(0.01, Number(sampling.edge_depth) || 0.04));
+        const horizontalBand = Math.max(1, Math.round(imageWidth * edgeDepth));
+        const verticalBand = Math.max(1, Math.round(imageHeight * edgeDepth));
+        const coverage = side => {
+            const configured = sampling[side] ?? {};
+            const start = Math.min(1, Math.max(0, Number(configured.start) || 0));
+            const end = Math.min(1, Math.max(0, Number(configured.end) || 1));
+            return end > start ? [start, end] : [0, 1];
+        };
         const sampleSide = (count, side) => Array.from({length: Math.max(0, Number(count) || 0)}, (_value, index) => {
+            const [start, end] = coverage(side);
             if (side === 'left') {
-                const y = imageY + Math.floor((count - index - 1) * imageHeight / count);
-                return this._averageImageArea(image, imageX, y, horizontalBand, Math.ceil(imageHeight / count));
+                const y = imageY + Math.floor((start + (end - start) * (count - index - 1) / count) * imageHeight);
+                return this._averageImageArea(image, imageX, y, horizontalBand, Math.ceil((end - start) * imageHeight / count));
             }
             if (side === 'top') {
-                const x = imageX + Math.floor(index * imageWidth / count);
-                return this._averageImageArea(image, x, imageY, Math.ceil(imageWidth / count), verticalBand);
+                const x = imageX + Math.floor((start + (end - start) * index / count) * imageWidth);
+                return this._averageImageArea(image, x, imageY, Math.ceil((end - start) * imageWidth / count), verticalBand);
             }
             if (side === 'right') {
-                const y = imageY + Math.floor(index * imageHeight / count);
-                return this._averageImageArea(image, imageX + imageWidth - horizontalBand, y, horizontalBand, Math.ceil(imageHeight / count));
+                const y = imageY + Math.floor((start + (end - start) * index / count) * imageHeight);
+                return this._averageImageArea(image, imageX + imageWidth - horizontalBand, y, horizontalBand, Math.ceil((end - start) * imageHeight / count));
             }
-            const x = imageX + Math.floor((count - index - 1) * imageWidth / count);
-            return this._averageImageArea(image, x, imageY + imageHeight - verticalBand, Math.ceil(imageWidth / count), verticalBand);
+            const x = imageX + Math.floor((start + (end - start) * (count - index - 1) / count) * imageWidth);
+            return this._averageImageArea(image, x, imageY + imageHeight - verticalBand, Math.ceil((end - start) * imageWidth / count), verticalBand);
         });
         const pixels = ['left', 'top', 'right', 'bottom'].flatMap(side => sampleSide(zones[side], side));
         return display.installation_direction === 'right-to-left' ? pixels.reverse() : pixels;

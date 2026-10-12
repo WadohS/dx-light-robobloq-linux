@@ -150,6 +150,11 @@ sends one color per display, one color per configured LED edge zone, or one
 wallpaper-sampled color per LED to the local D-Bus daemon. Windows are excluded;
 no Portal permission, PipeWire stream, or screen-sharing indicator is used.
 
+For installations where a strip covers only part of an edge, each display can
+set `sampling.edge_depth` (fraction sampled inward from the edge) and a
+`sampling.<side>.start`/`end` range (fractions along that edge). This keeps LED
+sampling aligned with the physical strip rather than the full screen edge.
+
 Example:
 ```
 python -m robobloq_led.screen_sync --monitor 2 --fps 40
