@@ -467,6 +467,7 @@ export default class RobobloqLedExtension extends Extension {
         const zones = display.zones ?? {};
         const sampling = display.sampling ?? {};
         const edgeDepth = Math.min(0.2, Math.max(0.01, Number(sampling.edge_depth) || 0.04));
+        const colorDelta = Math.min(80, Math.max(0, Number.isFinite(Number(sampling.color_delta)) ? Number(sampling.color_delta) : 24));
         const horizontalBand = Math.max(1, Math.round(imageWidth * edgeDepth));
         const verticalBand = Math.max(1, Math.round(imageHeight * edgeDepth));
         const coverage = side => {
@@ -493,7 +494,19 @@ export default class RobobloqLedExtension extends Extension {
             return this._averageImageArea(image, x, imageY + imageHeight - verticalBand, Math.ceil((end - start) * imageWidth / count), verticalBand);
         });
         const pixels = ['left', 'top', 'right', 'bottom'].flatMap(side => sampleSide(zones[side], side));
-        return display.installation_direction === 'right-to-left' ? pixels.reverse() : pixels;
+        const orderedPixels = display.installation_direction === 'right-to-left' ? pixels.reverse() : pixels;
+        return this._mergeNearbyPixelColors(orderedPixels, colorDelta);
+    }
+
+    _mergeNearbyPixelColors(pixels, colorDelta) {
+        let previous = null;
+        return pixels.map(color => {
+            const distance = previous === null ? Infinity : Math.hypot(
+                color[0] - previous[0], color[1] - previous[1], color[2] - previous[2]);
+            if (distance > colorDelta)
+                previous = color;
+            return previous;
+        });
     }
 
     _averageImageArea(image, imageX, imageY, imageWidth, imageHeight) {

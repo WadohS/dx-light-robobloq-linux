@@ -197,7 +197,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
         page.add(actions);
 
         saveButton.connect('clicked', () => {
-            const displays = widgets.map(display => ({
+            const displays = widgets.map((display, index) => ({
                 device: configuredDevices[display.device.selected],
                 screen: display.screen.selected === 0 ? 'left' : 'right',
                 location: ['back', 'top', 'bottom', 'left', 'right'][display.location.selected],
@@ -205,6 +205,7 @@ export default class RobobloqLedPreferences extends ExtensionPreferences {
                 sync_area: display.syncArea.selected === 0 ? 'edge' : 'center',
                 edge_count: display.edgeCount.selected + 3,
                 zones: Object.fromEntries(EDGE_KEYS.map(key => [key, key === 'bottom' && display.edgeCount.selected === 0 ? 0 : display.zones[key].get_value_as_int()])),
+                sampling: layout.displays[index]?.sampling,
             }));
             saveButton.sensitive = false;
             result.title = 'Enregistrement...';

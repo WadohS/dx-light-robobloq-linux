@@ -154,6 +154,8 @@ For installations where a strip covers only part of an edge, each display can
 set `sampling.edge_depth` (fraction sampled inward from the edge) and a
 `sampling.<side>.start`/`end` range (fractions along that edge). This keeps LED
 sampling aligned with the physical strip rather than the full screen edge.
+`sampling.color_delta` optionally merges consecutive colors that are visually
+very close, reducing HID updates and making wallpaper changes smoother.
 
 Example:
 ```
